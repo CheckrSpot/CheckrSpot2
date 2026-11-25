@@ -24,6 +24,7 @@
     "@capacitor/geolocation": "^8.2.0",
     "@capacitor/ios": "^8.5.0",
     "@capacitor/keyboard": "^8.0.6",
+    "@capacitor/network": "^8.0.1",
     "@capacitor/splash-screen": "^8.0.2",
     "@photostructure/tz-lookup": "^11.8.0",
     "cally": "^0.9.2",

@@ -311,7 +311,8 @@ button:hover:not(:disabled) {
 
 /* 16px or larger, or iOS zooms the page when the field is focused. */
 .details-form input,
-.editor-body input {
+.editor-body input,
+.taxon-settings input {
   padding: 0.6rem 0.7rem;
   font: inherit;
   font-size: 1rem;
@@ -322,7 +323,8 @@ button:hover:not(:disabled) {
 }
 
 .details-form input:focus,
-.editor-body input:focus {
+.editor-body input:focus,
+.taxon-settings input:focus {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
 }
@@ -739,11 +741,234 @@ calendar-month::part(selected) {
   font-weight: 600;
 }
 
+/* Taxon chooser: as tall as the space below its group, with a grid of
+   taxa from iNaturalist and a settings panel behind the gear. */
+.chooser.tall {
+  height: calc(100% - var(--chooser-top, 0px));
+}
+
+.taxon-bar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.chooser-title {
+  overflow: hidden;
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gear-btn {
+  padding: 0.25rem 0.5rem;
+}
+
+.gear-btn .icon {
+  width: 1.4rem;
+  height: 1.4rem;
+}
+
+/* The outer element's height animates; the padding is on the inside. */
+.taxon-settings {
+  flex: none;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border);
+  transition: height 0.3s ease;
+}
+
+.settings-inner {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+}
+
+.taxon-settings label {
+  display: grid;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.setting {
+  display: grid;
+  gap: 0.3rem;
+}
+
+/* A number field between − and + buttons. */
+.stepper {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.stepper input {
+  flex: 1;
+  text-align: center;
+}
+
+.step-btn {
+  flex: none;
+  width: 2.6rem;
+  padding: 0;
+  color: var(--accent);
+  font-size: 1.4rem;
+  font-weight: 400;
+  line-height: 1;
+  background: var(--border);
+}
+
+.step-btn:hover:not(:disabled) {
+  background: var(--border);
+  opacity: 0.8;
+}
+
+.step-btn:disabled {
+  color: var(--muted);
+  opacity: 0.5;
+  cursor: default;
+}
+
+.taxon-settings input {
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.suggestions {
+  max-height: 12rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.suggestions:empty {
+  display: none;
+}
+
+.suggestions button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 0.5rem 0.25rem;
+  color: var(--fg);
+  font-weight: 400;
+  text-align: left;
+  background: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.suggestions button:hover:not(:disabled) {
+  background: var(--border);
+}
+
+.suggestion-sub {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.taxon-body {
+  display: block;
+  flex: 1;
+}
+
+.taxon-status {
+  padding: 2rem 0.5rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.taxon-status p {
+  margin: 0 0 1rem;
+}
+
+.taxon-status button {
+  width: auto;
+}
+
+.taxon-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem 0.5rem;
+}
+
+.taxon-tile {
+  padding: 0;
+  color: var(--fg);
+  font-weight: 400;
+  text-align: center;
+  background: none;
+  border-radius: 0.5rem;
+}
+
+.taxon-tile:hover:not(:disabled) {
+  background: none;
+  opacity: 0.8;
+}
+
+/* Square, whatever the photo's shape. */
+.taxon-thumb {
+  position: relative;
+  display: block;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 0.5rem;
+}
+
+.taxon-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Observation count, a quarter of the tile's edge high (--tile-size is set
+   from the tile's width). */
+.taxon-count {
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: 0 0.2em;
+  color: #fff;
+  font-size: calc(var(--tile-size, 6rem) / 4);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  line-height: 1.15;
+  background: rgba(0, 0, 0, 0.45);
+  border-bottom-left-radius: 0.4rem;
+}
+
+.taxon-name {
+  display: -webkit-box;
+  margin-top: 0.25rem;
+  overflow: hidden;
+  font-size: 0.8rem;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.taxon-name.italic {
+  font-style: italic;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .screen,
   .field-group,
   .chooser,
-  .chooser.open {
+  .chooser.open,
+  .taxon-settings {
     transition: none;
   }
 }

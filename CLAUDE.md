@@ -54,6 +54,8 @@ dependencies change.
   finished appearing. Android resizes the web view itself, so there the
   reveal runs on window `resize`. The plugin hides iOS's keyboard accessory
   bar by default; `main.ts` turns it back on.
+- `@capacitor/network`: only to grey out the taxon chooser's Choose button
+  when offline.
 - Web libraries: `cally` (calendar web components; falls back to `<style>`
   where constructable stylesheets are missing), `temporal-polyfill` (loaded
   by dynamic import only when `globalThis.Temporal` is missing; its own
@@ -69,9 +71,19 @@ dependencies change.
   `app.innerHTML` template (list, capture button, `<dialog>`s), followed by
   plain DOM code. No components or state library.
 - `src/editor.ts` — the reading editor (`createEditor(host)` → `open(r)`),
-  with its own markup template appended to `#app`, and the date/time chooser
-  (Cally calendar + `makeWheel` scroll-snap wheels). `EditorHost` gives it
+  with its own markup template appended to `#app`, the general chooser
+  mechanism (`Chooser`: group, panel, fields, `begin`) and the date/time
+  chooser (Cally calendar + `makeWheel` scroll-snap wheels). `EditorHost` gives it
   `lookUpPlace` (= `resolvePlace`) and `save` (`updateReading` + refresh).
+- `src/taxonChooser.ts` — the taxon chooser panel (`TAXON_CHOOSER_MARKUP`,
+  included in the editor's markup; `createTaxonChooser(host)` → `begin(spot)`),
+  its settings (`localStorage` `taxonChooser`) and grid.
+- `src/inaturalist.ts` — iNaturalist API client: `nearbyTaxa`
+  (`/observations/species_counts`, session cache by query), `searchTaxa`
+  (`/taxa/autocomplete`), `isoWeek`, `weeksAround`. `CapacitorHttp` with
+  User-Agent `CheckrSpot/2.0`, as for Nominatim.
+- `src/motion.ts` — `SLIDE_MS` (matches the CSS transitions),
+  `reducedMotion`, `afterSlide`, `expand` (height animation for a panel).
 - `src/time.ts` — `initTime` (polyfill), `zoneAt(lat, lng)` (IANA zone or
   null), `wallTime` / `fromWallTime` (epoch ms ↔ date, `hh:mm` and the
   sub-minute ms in a zone; UTC when the zone is null), `parseWallTime`,
@@ -204,8 +216,8 @@ from a `Position` (capture) or a photo (import).
   inspector dialog).
 - **Editor** (`editor.ts`): full-screen `<dialog class="screen">` sliding in
   from the right; Cancel / code title / Save (disabled until a field
-  changes). Field groups, in order: ID, Taxon, Date and time (with zone name
-  and Choose), Location (latitude, longitude, accuracy), Altitude, Region,
+  changes). Field groups, in order: ID, Taxon (with Choose), Date and time
+  (with zone name and Choose), Location (latitude, longitude, accuracy), Altitude, Region,
   Locality (two lines), Collector. Every field is text; return moves to the
   next. Closing with changes (Cancel, left-edge swipe, Escape / Android back
   via the dialog's `cancel` event) asks "Discard changes?".
@@ -218,10 +230,28 @@ from a `Position` (capture) or a photo (import).
     `.field-group`, the card inside keeps its size), slides the chooser up
     from the bottom (capped below the group via `--chooser-top`), makes all
     inputs read-only and writes the chooser's values into the group's fields
-    live. Done keeps them; Cancel restores. Only date and time so far; a map
-    chooser for location and a taxon catalogue are planned.
+    live. Done keeps them; Cancel restores. Date/time and taxon so far; a
+    map chooser for location is planned.
   - The user wants Cally for the calendar; the time is hour and minute
     wheels (24-hour).
+  - **Taxon chooser**: iNat `species_counts` for the base taxon within the
+    radius of the typed coordinates, in the ISO weeks of the year around the
+    typed date (any year; `week=`, wrapping at New Year, 53 added there;
+    omitted when the window covers the year), `verifiable=true`, up to 500,
+    most observed first. A 3-column grid of square thumbnails (`medium_url`,
+    `object-fit: cover`) with the count overlaid top right at a quarter of
+    the tile edge (`--tile-size`, set from the tile width by a
+    ResizeObserver) and the scientific name below (italic at genus and
+    below). Tapping a tile puts the scientific name in Taxon and closes the
+    chooser (as Done); the bar has Cancel, a summary ("Butterflies · 25 km ·
+    ±3 wk") and a gear. The gear expands settings: base taxon (searched by
+    name via autocomplete; stored as id + display name, the name used only
+    for display), radius km (0–500) and ± weeks (0–26, one number for both sides), applied
+    on leaving the field, invalid values undone. Both have − / + buttons:
+    weeks by 1, radius through `RADIUS_STEPS` (1, 2, 5 … 500); the summary
+    updates at once and the grid reloads 0.5 s after the last tap. Defaults: Butterflies
+    (47224), 25 km, ±3 weeks. Choose is disabled offline (`@capacitor/network`);
+    a failed request shows "Couldn't reach iNaturalist." with Retry.
 - **Region lookup** (Nominatim, `zoom=9`, `accept-language=en`,
   User-Agent `CheckrSpot/2.0`, no contact email by the user's choice) runs
   only on demand, never at capture or in the background: opening the

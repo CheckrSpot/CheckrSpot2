@@ -1,13 +1,18 @@
 import 'cally';
+import { Network, type ConnectionStatus } from '@capacitor/network';
 import { MAX_CODE_LENGTH, type Reading } from './db';
+import { afterSlide, reducedMotion } from './motion';
+import { createTaxonChooser, TAXON_CHOOSER_MARKUP } from './taxonChooser';
 import { fromWallTime, parseWallTime, wallTime, zoneAt, zoneName } from './time';
 
 // The reading editor: a full-screen view that slides in from the right, with
 // every field editable as text. Fields with a richer editor (a "chooser")
 // are grouped under a Choose button. Choosing collapses the other groups,
 // leaving that group at the top, and slides the chooser up from the bottom;
-// the group's fields then follow the chooser, read-only, until Done (keep)
-// or Cancel (restore). Swipe in from the left edge, or Cancel, to close.
+// the group's fields then follow the chooser, read-only, until it is done
+// (keep) or cancelled (restore). The date and time chooser is here; the
+// taxon chooser is in taxonChooser.ts. Swipe in from the left edge, or
+// Cancel, to close the editor.
 
 /** What the editor needs from the app. */
 export interface EditorHost {
@@ -17,9 +22,6 @@ export interface EditorHost {
   save(r: Reading): Promise<void>;
 }
 
-// Matches the transitions in style.css.
-const SLIDE_MS = 300;
-
 // How close to the left edge a swipe must start, and how far (as a fraction
 // of the width) or fast (px/ms) it must go, to close the editor.
 const EDGE_PX = 24;
@@ -27,9 +29,6 @@ const CLOSE_DISTANCE = 0.35;
 const CLOSE_VELOCITY = 0.5;
 
 const pad = (n: number) => String(n).padStart(2, '0');
-
-const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
-const afterSlide = (fn: () => void) => setTimeout(fn, reducedMotion() ? 0 : SLIDE_MS);
 
 // One collapsible group of fields. The outer element's height animates; the
 // card inside it keeps its padding, so its height can be measured.
@@ -64,9 +63,10 @@ const MARKUP = `
       )}
       ${group(
         'taxon',
-        null,
-        `<label>Taxon<input id="ed-taxon" type="text" autocapitalize="sentences"
-          autocorrect="off" spellcheck="false" /></label>`,
+        'Taxon',
+        `<input id="ed-taxon" type="text" autocapitalize="sentences" autocorrect="off"
+          spellcheck="false" aria-label="Taxon" />`,
+        true,
       )}
       ${group(
         'when',
@@ -139,6 +139,7 @@ const MARKUP = `
         </div>
       </div>
     </section>
+    ${TAXON_CHOOSER_MARKUP}
   </dialog>
   <dialog id="confirm-discard" class="inspector" aria-labelledby="discard-title">
     <h2 id="discard-title">Discard changes?</h2>
@@ -217,7 +218,7 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
   const inputs = [...form.querySelectorAll('input')];
   const groups = [...form.querySelectorAll<HTMLElement>('.field-group')];
   const whenGroup = q<HTMLElement>('[data-group="when"]');
-  const whenChooser = q<HTMLElement>('#when-chooser');
+  const taxonGroup = q<HTMLElement>('[data-group="taxon"]');
   const calendar = q<HTMLElement & { value: string; focusedDate?: string }>('#ed-calendar');
 
   // The reading being edited, as saved (its region is filled in if a lookup
@@ -227,23 +228,38 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
   const changed = (el: HTMLInputElement) => el.value !== initial.get(el);
   const dirty = () => inputs.some(changed);
 
-  // Whether a chooser is open, and its group's values from before it opened.
-  let choosing = false;
+  /** A rich editor for one group's fields. */
+  interface Chooser {
+    group: HTMLElement;
+    /** Slides up from the bottom. */
+    panel: HTMLElement;
+    /** The fields it fills in, which Cancel restores. */
+    fields: HTMLInputElement[];
+    /** Set the chooser up from the fields; called once its panel is open. */
+    begin(): void;
+  }
+
+  // The open chooser, and its fields' values from before it opened.
+  let active: Chooser | null = null;
   let beforeChoosing: string[] = [];
 
   function updateSave() {
-    saveBtn.disabled = choosing || !dirty();
+    saveBtn.disabled = active !== null || !dirty();
+  }
+
+  // The coordinates as typed, or the saved ones if they aren't numbers.
+  function typedCoords(): [number, number] {
+    const lat = Number(latIn.value);
+    const lng = Number(lngIn.value);
+    return latIn.value.trim() && lngIn.value.trim() && Number.isFinite(lat) && Number.isFinite(lng)
+      ? [lat, lng]
+      : [original!.latitude, original!.longitude];
   }
 
   // The zone the date and time are in, from the coordinates as typed.
   function updateZone() {
     if (!original) return;
-    const lat = Number(latIn.value);
-    const lng = Number(lngIn.value);
-    const zone =
-      latIn.value.trim() && lngIn.value.trim() && Number.isFinite(lat) && Number.isFinite(lng)
-        ? zoneAt(lat, lng)
-        : zoneAt(original.latitude, original.longitude);
+    const zone = zoneAt(...typedCoords());
     const at = fromWallTime(dateIn.value, timeIn.value, 0, zone) ?? original.recordedAt;
     q('#ed-zone').textContent = zoneName(zone, at);
   }
@@ -313,7 +329,7 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
   }
 
   async function requestClose() {
-    if (choosing) {
+    if (active) {
       endChoosing(false);
       return;
     }
@@ -323,7 +339,7 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
 
   editorEl.addEventListener('close', () => {
     editorEl.classList.remove('shown');
-    if (choosing) endChoosing(false);
+    endChoosing(false);
     original = null;
   });
 
@@ -466,6 +482,39 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
     }
   }
 
+  function startChoosing(c: Chooser) {
+    if (!original || active) return;
+    active = c;
+    beforeChoosing = c.fields.map((el) => el.value);
+    (document.activeElement as HTMLElement | null)?.blur();
+    for (const el of inputs) el.readOnly = true;
+    cancelBtn.disabled = true;
+    updateSave();
+    form.classList.add('choosing');
+    // Keep the chooser below the group, which ends up at the top.
+    const top = form.offsetTop + c.group.offsetHeight + 24;
+    editorEl.style.setProperty('--chooser-top', `${top}px`);
+    collapseGroups(c.group, true);
+    form.scrollTo({ top: 0, behavior: reducedMotion() ? 'auto' : 'smooth' });
+    c.panel.classList.add('open');
+    c.begin();
+  }
+
+  // Close the chooser, keeping its values or restoring the fields.
+  function endChoosing(keep: boolean) {
+    const c = active;
+    if (!c) return;
+    if (!keep) c.fields.forEach((el, i) => (el.value = beforeChoosing[i]));
+    active = null;
+    c.panel.classList.remove('open');
+    form.classList.remove('choosing');
+    collapseGroups(c.group, false);
+    for (const el of inputs) el.readOnly = false;
+    cancelBtn.disabled = false;
+    updateZone();
+    updateSave();
+  }
+
   // The date and time chooser: Cally's calendar and two wheels.
   const setTime = () => {
     timeIn.value = `${pad(hours.value)}:${pad(minutes.value)}`;
@@ -478,55 +527,64 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
     updateZone();
   });
 
-  function startChoosing() {
-    if (!original || choosing) return;
-    choosing = true;
-    beforeChoosing = [dateIn.value, timeIn.value];
-    (document.activeElement as HTMLElement | null)?.blur();
-    for (const el of inputs) el.readOnly = true;
-    cancelBtn.disabled = true;
-    updateSave();
-    // Start from the fields as typed, or the saved time if they don't parse;
-    // either way the fields now show what the chooser shows.
-    let parts = parseWallTime(dateIn.value, timeIn.value);
-    if (!parts) {
-      const w = wallTime(original.recordedAt, zoneAt(original.latitude, original.longitude));
-      parts = parseWallTime(w.date, w.time)!;
-    }
-    const [y, mo, d, h, mi] = parts;
-    const date = `${y}-${pad(mo)}-${pad(d)}`;
-    calendar.value = date;
-    calendar.focusedDate = date;
-    dateIn.value = date;
-    form.classList.add('choosing');
-    // Keep the chooser below the group, which ends up at the top.
-    const top = form.offsetTop + whenGroup.offsetHeight + 24;
-    editorEl.style.setProperty('--chooser-top', `${top}px`);
-    collapseGroups(whenGroup, true);
-    form.scrollTo({ top: 0, behavior: reducedMotion() ? 'auto' : 'smooth' });
-    whenChooser.classList.add('open');
-    hours.show(h);
-    minutes.show(mi);
-    setTime();
+  // The date and time as typed, or the saved ones if they don't parse.
+  function typedWallTime(): number[] {
+    const r = original!;
+    const parts = parseWallTime(dateIn.value, timeIn.value);
+    if (parts) return parts;
+    const w = wallTime(r.recordedAt, zoneAt(r.latitude, r.longitude));
+    return parseWallTime(w.date, w.time)!;
   }
 
-  // Close the chooser, keeping its values or restoring the fields.
-  function endChoosing(keep: boolean) {
-    if (!choosing) return;
-    if (!keep) [dateIn.value, timeIn.value] = beforeChoosing;
-    choosing = false;
-    whenChooser.classList.remove('open');
-    form.classList.remove('choosing');
-    collapseGroups(whenGroup, false);
-    for (const el of inputs) el.readOnly = false;
-    cancelBtn.disabled = false;
-    updateZone();
-    updateSave();
-  }
+  const whenChooser: Chooser = {
+    group: whenGroup,
+    panel: q('#when-chooser'),
+    fields: [dateIn, timeIn],
+    begin() {
+      // The fields now show what the chooser shows.
+      const [y, mo, d, h, mi] = typedWallTime();
+      const date = `${y}-${pad(mo)}-${pad(d)}`;
+      calendar.value = date;
+      calendar.focusedDate = date;
+      dateIn.value = date;
+      hours.show(h);
+      minutes.show(mi);
+      setTime();
+    },
+  };
 
-  whenGroup.querySelector('.choose-btn')!.addEventListener('click', startChoosing);
+  whenGroup.querySelector('.choose-btn')!.addEventListener('click', () => startChoosing(whenChooser));
   q('#when-cancel').addEventListener('click', () => endChoosing(false));
   q('#when-done').addEventListener('click', () => endChoosing(true));
+
+  // The taxon chooser queries iNaturalist for the place and date as typed.
+  const taxonPicker = createTaxonChooser({
+    pick(name) {
+      taxonIn.value = name;
+      endChoosing(true);
+    },
+    cancel: () => endChoosing(false),
+  });
+
+  const taxonChooser: Chooser = {
+    group: taxonGroup,
+    panel: q('#taxon-chooser'),
+    fields: [taxonIn],
+    begin() {
+      const [latitude, longitude] = typedCoords();
+      const [year, month, day] = typedWallTime();
+      taxonPicker.begin({ latitude, longitude, year, month, day });
+    },
+  };
+
+  // Greyed out without a network connection, since it needs iNaturalist.
+  const taxonChooseBtn = taxonGroup.querySelector<HTMLButtonElement>('.choose-btn')!;
+  taxonChooseBtn.addEventListener('click', () => startChoosing(taxonChooser));
+  const showConnection = ({ connected }: ConnectionStatus) => {
+    taxonChooseBtn.disabled = !connected;
+  };
+  Network.getStatus().then(showConnection, () => {});
+  Network.addListener('networkStatusChange', showConnection);
 
   // Swipe in from the left edge to close, as with iOS navigation. The editor
   // follows the finger; let go far or fast enough and it closes (asking
@@ -538,7 +596,7 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
     'touchstart',
     (e) => {
       const t = e.touches[0];
-      if (choosing || e.touches.length !== 1 || t.clientX > EDGE_PX) return;
+      if (active || e.touches.length !== 1 || t.clientX > EDGE_PX) return;
       drag = { x0: t.clientX, y0: t.clientY, t0: e.timeStamp, dx: 0, horizontal: null };
     },
     { passive: true },

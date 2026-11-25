@@ -36,6 +36,9 @@ database.
   [`@photostructure/tz-lookup`](https://github.com/photostructure/tz-lookup)
   for the time zone at a reading's coordinates (offline);
   [Cally](https://wicky.nillia.ms/cally/) for the calendar in the editor
+- **Taxa:** the [iNaturalist API](https://api.inaturalist.org/v1/docs/) for the
+  taxon chooser, and [`@capacitor/network`](https://capacitorjs.com/docs/apis/network)
+  to disable it when offline
 - **Reverse geocoding:** OpenStreetMap's [Nominatim](https://nominatim.org/),
   called with `CapacitorHttp` (part of `@capacitor/core`) — see
   [Region lookup](#region-lookup)
@@ -67,6 +70,15 @@ database.
 - In the editor, **Choose** next to *Date and time* collapses the other fields
   and slides up a calendar and hour/minute wheels. The date and time fields
   follow them; **Done** keeps the choice, **Cancel** puts the fields back.
+- **Choose** next to *Taxon* shows the taxa observed on iNaturalist near the
+  reading at that time of year (any year), most observed first: a grid of
+  photos with the scientific name and the number of observations. Tap one
+  to put its scientific name in the Taxon field. The gear sets the base
+  taxon (search by name), the radius and how many weeks either side of the
+  reading's date (type them, or use the − / + buttons); the defaults are
+  butterflies, 25 km and ±3 weeks, and
+  your choices are remembered. Choose is greyed out without a network
+  connection.
 - Times are always shown and edited as **local time where the reading was
   taken** (the zone, e.g. MST, is shown in the editor), wherever the phone is
   now. The zone comes from the coordinates, so moving a reading in the editor
@@ -201,6 +213,9 @@ A failed save is reported in an alert rather than crashing the app.
 
 - `src/main.ts` — UI, location watching, scanning and the capture flow
 - `src/editor.ts` — the reading editor and its date and time chooser
+- `src/taxonChooser.ts` — the taxon chooser and its settings
+- `src/inaturalist.ts` — the iNaturalist API client
+- `src/motion.ts` — animation timing shared by the editor and choosers
 - `src/time.ts` — time zones and conversions (Temporal, tz-lookup)
 - `src/polyfills.ts` — small polyfills for the oldest supported web views
 - `src/db.ts` — `ReadingsStore` (SQLite on native, in-memory stub on web) and schema

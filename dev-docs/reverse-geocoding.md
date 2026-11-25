@@ -25,8 +25,9 @@ Other decisions:
   would be too easily confused with `locality`).
 - Requests always ask for English names (`accept-language=en`).
 - The full service response is stored so a future JSON export can include it.
-- No periodic or network-triggered lookups, so `@capacitor/network` isn't
-  needed.
+- No periodic or network-triggered lookups. (`@capacitor/network` was later
+  added for the taxon chooser, which is greyed out offline; region lookups
+  still don't use it.)
 - The editor looks up only the reading it shows. Labels looks up the
   selected readings.
 - The app depends only on a small interface that hides the service and its
