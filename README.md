@@ -141,7 +141,7 @@ Scanning needs a real device; the iOS simulator has no camera.
 iOS builds run from Xcode (Debug) install as **CheckrDev**
 (`org.vorthmann.checkrspot.dev`), so they can sit alongside the App Store
 version of CheckrSpot. Archived (Release) builds use the real bundle id
-`org.vorthmann.checkrspot` and replace the older CheckrSpot app in the App Store.
+`org.vorthmann.CheckrSpot` (capitalised, as the old app's) and replace the older CheckrSpot app in the App Store.
 
 ## Building and deploying
 

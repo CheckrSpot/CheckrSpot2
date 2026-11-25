@@ -268,9 +268,10 @@ from a `Position` (capture) or a photo (import).
 
 ## App identity and App Store plan
 
-- App id is `org.vorthmann.checkrspot` everywhere (`capacitor.config.ts`, iOS
-  bundle id, Android `applicationId`/`namespace`; `MainActivity` lives in that
-  Java package), except iOS **Debug** builds.
+- App id is `org.vorthmann.checkrspot` (`capacitor.config.ts`, Android
+  `applicationId`/`namespace`; `MainActivity` lives in that Java package).
+  The iOS Release bundle id is **`org.vorthmann.CheckrSpot`**, capitalised to
+  match the old app's App Store record exactly; don't lowercase it.
 - iOS Debug builds (Run from Xcode) use bundle id
   `org.vorthmann.checkrspot.dev` and home-screen name "CheckrDev", so they
   install alongside the old App Store app on the user's phone. Release builds
@@ -278,12 +279,15 @@ from a `Position` (capture) or a photo (import).
   target build settings (`PRODUCT_BUNDLE_IDENTIFIER`, `APP_DISPLAY_NAME`);
   Info.plist's `CFBundleDisplayName` is `$(APP_DISPLAY_NAME)`. The Xcode
   target/scheme is still named CheckrSpot2.
-- That bundle id belongs to the user's older iOS-only app **CheckrSpot**, which
-  this app will replace in the App Store as an update to the same app record.
-  So: keep the bundle id and team (`85ZT5UZ396`); `MARKETING_VERSION` must stay
-  above the old app's latest App Store version (currently set to 2.0); don't
-  drop iPad support (`TARGETED_DEVICE_FAMILY = "1,2"`); don't raise the iOS
-  deployment target (15.0) without considering existing users. Updating users
+- That bundle id belongs to the user's older iPhone-only app **CheckrSpot**
+  (`../checkrspot`; last shipped 1.0.x, iOS 16+), which this app will replace
+  in the App Store as an update to the same app record. So: keep the bundle
+  id and team (`85ZT5UZ396`); `MARKETING_VERSION` must stay above the old
+  app's latest App Store version (currently set to 2.0); iPhone only
+  (`TARGETED_DEVICE_FAMILY = 1`, by the user's choice; adding iPad would need
+  iPad screenshots and review); don't raise the iOS deployment target (15.0)
+  without considering existing users. The old project also built a Mac app,
+  but it was never published, so it doesn't matter here. Updating users
   keep the old app's sandbox data; the old app stored none, so no import is
   needed.
 
