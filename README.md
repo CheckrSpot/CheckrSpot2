@@ -19,6 +19,10 @@ database.
   and the Android `org.vorthmann.checkrspot` package) that opens the system
   print dialog for the web view; `window.print()` on web
 - **Clipboard:** [`@capacitor/clipboard`](https://capacitorjs.com/docs/apis/clipboard)
+- **Keyboard:** [`@capacitor/keyboard`](https://capacitorjs.com/docs/apis/keyboard)
+  stops iOS scrolling the whole page when a field is focused, and reports the
+  keyboard's height so the editor can fit above it, keeping its header bar in
+  place
 - **Photo import:** a third in-app plugin (`PhotoImportPlugin`): the system
   photo picker, EXIF via ImageIO and QR detection via Vision on iOS; the
   document picker, `androidx.exifinterface` and ML Kit barcode scanning on
@@ -26,6 +30,12 @@ database.
 - **Saving files:** another small in-app plugin (`FileSaverPlugin`) that opens
   the system save dialog (iOS document picker, Android "save as"); no
   permissions needed. A browser download on web
+- **Dates and times:** [Temporal](https://tc39.es/proposal-temporal/docs/)
+  for time-zone arithmetic, with [`temporal-polyfill`](https://github.com/fullcalendar/temporal-polyfill)
+  loaded only when the web view lacks it;
+  [`@photostructure/tz-lookup`](https://github.com/photostructure/tz-lookup)
+  for the time zone at a reading's coordinates (offline);
+  [Cally](https://wicky.nillia.ms/cally/) for the calendar in the editor
 - **Reverse geocoding:** OpenStreetMap's [Nominatim](https://nominatim.org/),
   called with `CapacitorHttp` (part of `@capacitor/core`) — see
   [Region lookup](#region-lookup)
@@ -48,8 +58,23 @@ database.
   usual Locality / Taxon / Collector dialog appears; import several and they
   get the last used collector, with no locality or taxon. Photos that can't be used, or whose reading is already in
   the list, are skipped and listed afterwards.
-- The list shows each reading's ID and taxon, newest first. Tap one to see its
-  time, date, region, locality, coordinates, accuracy, altitude and collector.
+- The list shows each reading's ID and taxon, newest first. Tap one to open
+  the **editor**, which slides in from the right. Every field can be edited as
+  text: ID, taxon, date and time, latitude, longitude, accuracy, altitude,
+  region, both locality lines and collector. **Save** (enabled once something
+  has changed) or **Cancel**; swiping in from the left edge (or Android's back
+  gesture) also closes it, asking first if there are unsaved changes.
+- In the editor, **Choose** next to *Date and time* collapses the other fields
+  and slides up a calendar and hour/minute wheels. The date and time fields
+  follow them; **Done** keeps the choice, **Cancel** puts the fields back.
+- Times are always shown and edited as **local time where the reading was
+  taken** (the zone, e.g. MST, is shown in the editor), wherever the phone is
+  now. The zone comes from the coordinates, so moving a reading in the editor
+  keeps its clock time. If the zone can't be determined, times are UTC and
+  marked with a **Z**. Seconds are stored but never shown or exported.
+- A region you type in the editor is kept and never replaced by a lookup.
+  Clear it to have it looked up again. Changing the coordinates drops a
+  looked-up region, which is looked up again when next needed.
 - **Select** lets you pick readings and delete them, or tap **Labels** to
   preview specimen labels for them (oldest first, shown at twice actual size)
   and **Print** them. Each label has a locality block (region, both locality lines, coordinates
@@ -72,7 +97,7 @@ database.
 Each reading gets a short **region** such as `US-AZ, Pima Co.` (the ISO region
 code, then the county or nearest equivalent) from Nominatim. The app is often
 used without a network, so nothing is looked up when a reading is captured.
-A lookup happens only when you open a reading in the list (for that reading)
+A lookup happens only when you open a reading in the editor (for that reading)
 or tap **Labels**, copy or download (for the selected readings that don't have one yet). Results
 are saved, so each reading is looked up once.
 
@@ -118,6 +143,24 @@ iOS builds run from Xcode (Debug) install as **CheckrDev**
 version of CheckrSpot. Archived (Release) builds use the real bundle id
 `org.vorthmann.checkrspot` and replace the older CheckrSpot app in the App Store.
 
+## Building and deploying
+
+`tools.sh` builds the web app, copies it into the native project and then:
+
+```sh
+./tools.sh iphone <udid>   # Debug build (CheckrDev), installed and launched on a USB iPhone
+./tools.sh ios             # Release archive, uploaded to App Store Connect (TestFlight)
+./tools.sh android <path>  # debug APK copied to <path> (a file, or a directory → checkrspot-YYYYMMDD.apk)
+```
+
+Nothing in it is specific to this app (it came from the `fence-jobs`
+project): paths and the app name come from `npx cap config --json`, the Xcode
+scheme from the project's target (CheckrSpot2), and the bundle ID from the
+built app. `./tools.sh iphone` without a UDID lists the connected devices. The
+iOS commands sign with the Xcode account's team; `ios` sets the build number
+to a timestamp (`YYYYMMDD.HHMM`) so each upload is higher, without editing the
+project. The upload goes to the existing CheckrSpot app record.
+
 ## Permissions
 
 - **iOS** — `NSLocationWhenInUseUsageDescription` and `NSCameraUsageDescription`
@@ -138,8 +181,8 @@ the first time you scan; on Android, media location the first time you import.
 Each reading is saved to a `readings` table: latitude, longitude, accuracy
 (empty for imported photos that don't record it), altitude, recorded-at timestamp, `code` (the scanned ID, at most 25
 characters), `locality`, `locality2`, `taxon`, `collector`, and from the
-region lookup `region`, `place_source` (e.g. `nominatim`; empty until looked
-up) and `place_details` (the service's full response as JSON). See `src/db.ts` for the schema and
+region lookup `region`, `place_source` (e.g. `nominatim`, or `manual` for a
+region typed in the editor; empty until looked up) and `place_details` (the service's full response as JSON). See `src/db.ts` for the schema and
 `ReadingsStore` interface.
 
 - **Native (iOS/Android):** backed by real SQLite via
@@ -157,6 +200,9 @@ A failed save is reported in an alert rather than crashing the app.
 ## Project layout
 
 - `src/main.ts` — UI, location watching, scanning and the capture flow
+- `src/editor.ts` — the reading editor and its date and time chooser
+- `src/time.ts` — time zones and conversions (Temporal, tz-lookup)
+- `src/polyfills.ts` — small polyfills for the oldest supported web views
 - `src/db.ts` — `ReadingsStore` (SQLite on native, in-memory stub on web) and schema
 - `src/export.ts` — JSON and CSV formatting for copying and downloading readings
 - `src/fileSaver.ts` — JS side of the app's own `FileSaver` plugin

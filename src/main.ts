@@ -1,8 +1,10 @@
+import './polyfills';
 import './style.css';
 import { Geolocation, type Position } from '@capacitor/geolocation';
 import { Capacitor } from '@capacitor/core';
 import { SplashScreen } from '@capacitor/splash-screen';
 import { Clipboard } from '@capacitor/clipboard';
+import { Keyboard } from '@capacitor/keyboard';
 import {
   CapacitorBarcodeScanner,
   CapacitorBarcodeScannerTypeHint,
@@ -20,6 +22,8 @@ import { FileSaver } from './fileSaver';
 import type { ReverseGeocoder } from './geocoder';
 import { NominatimGeocoder } from './nominatim';
 import { exportFilename, formatReading, toCSV, toJSON, type ExportFormat } from './export';
+import { createEditor } from './editor';
+import { initTime } from './time';
 import { PhotoImport, photoReading, type PickedPhoto } from './photoImport';
 
 const STALE_FIX_MS = 3000;
@@ -80,23 +84,6 @@ app.innerHTML = `
       <polygon points="3 11 22 2 13 21 11 13 3 11" />
     </svg>
   </button>
-  <dialog id="inspector" class="inspector" aria-labelledby="inspector-title">
-    <h2 id="inspector-title" class="split-title"><span id="inspector-code" class="code"></span><span id="inspector-taxon"></span></h2>
-    <dl class="result">
-      <div><dt>Time</dt><dd id="time-value">—</dd></div>
-      <div><dt>Date</dt><dd id="date-value">—</dd></div>
-      <div><dt>Region</dt><dd id="region-value">—</dd></div>
-      <div><dt>Locality</dt><dd id="locality-value">—</dd></div>
-      <div><dt>Latitude</dt><dd id="lat">—</dd></div>
-      <div><dt>Longitude</dt><dd id="lng">—</dd></div>
-      <div><dt>Accuracy</dt><dd id="acc">—</dd></div>
-      <div><dt>Altitude</dt><dd id="alt">—</dd></div>
-      <div><dt>Collector</dt><dd id="collector-value">—</dd></div>
-    </dl>
-    <form method="dialog">
-      <button type="submit" class="close-btn">Close</button>
-    </form>
-  </dialog>
   <dialog id="details" class="inspector details" aria-labelledby="details-title">
     <h2 id="details-title">ID<span id="details-code" class="code"></span></h2>
     <form method="dialog" class="details-form">
@@ -181,7 +168,6 @@ app.innerHTML = `
 
 const btn = document.querySelector<HTMLButtonElement>('#fix-btn')!;
 const historyEl = document.querySelector<HTMLOListElement>('#history-list')!;
-const inspectorEl = document.querySelector<HTMLDialogElement>('#inspector')!;
 const selectBtn = document.querySelector<HTMLButtonElement>('#select-btn')!;
 const importBtn = document.querySelector<HTMLButtonElement>('#import-btn')!;
 const importStatusEl = document.querySelector<HTMLDialogElement>('#import-status')!;
@@ -226,8 +212,8 @@ let readings: Reading[] = [];
 // Most recent position from the location watch; null when we have no usable fix.
 let currentFix: Position | null = null;
 
-// Region lookups run only on demand: when a reading is inspected, and for
-// labels. See dev-docs/reverse-geocoding.md.
+// Region lookups run only on demand: when a reading is opened in the editor,
+// and for labels and exports. See dev-docs/reverse-geocoding.md.
 const geocoder: ReverseGeocoder = new NominatimGeocoder();
 
 // Look up a reading's place and save it. Resolves with the updated reading,
@@ -250,52 +236,16 @@ const set = (id: string, value: string) => {
   document.querySelector<HTMLElement>(`#${id}`)!.textContent = value;
 };
 
-// The reading shown in the inspector, so a region that arrives after the
-// inspector has closed (or moved on) isn't shown on the wrong reading.
-let inspectedId: number | null = null;
-
-function inspect(r: Reading) {
-  const { date, time } = formatReading(r);
-  inspectedId = r.id;
-  set('inspector-code', r.code);
-  set('inspector-taxon', r.taxon ?? '');
-  set('time-value', time);
-  set('date-value', date);
-  if (r.place) {
-    set('region-value', r.region ?? '—');
-  } else {
-    set('region-value', 'Looking up…');
-    resolvePlace(r).then(
-      (u) => {
-        if (inspectedId === u.id) set('region-value', u.region ?? '—');
-      },
-      () => {
-        if (inspectedId === r.id) set('region-value', '—');
-      },
-    );
-  }
-  // Both locality lines in one cell, one per line.
-  const localityLines = [r.locality, r.locality2].filter((line) => line != null);
-  const localityEl = document.querySelector<HTMLElement>('#locality-value')!;
-  localityEl.replaceChildren();
-  localityLines.forEach((line, i) => {
-    if (i > 0) localityEl.append(document.createElement('br'));
-    localityEl.append(line);
-  });
-  if (localityLines.length === 0) localityEl.textContent = '—';
-  set('collector-value', r.collector ?? '—');
-  set('lat', r.latitude.toFixed(5) + '°');
-  set('lng', r.longitude.toFixed(5) + '°');
-  set('acc', r.accuracy != null ? `± ${r.accuracy.toFixed(0)} m` : 'n/a');
-  set('alt', r.altitude != null ? `${r.altitude.toFixed(0)} m` : 'n/a');
-  inspectorEl.showModal();
-}
-
-inspectorEl.addEventListener('close', () => {
-  inspectedId = null;
+const editor = createEditor({
+  lookUpPlace: resolvePlace,
+  async save(r) {
+    if (!store) throw new Error('storage unavailable');
+    await store.updateReading(r);
+    await refreshHistory();
+  },
 });
 
-// Selection mode: rows toggle selection instead of opening the inspector,
+// Selection mode: rows toggle selection instead of opening the editor,
 // and the capture button is replaced by the action bar.
 let selecting = false;
 const selected = new Set<number>();
@@ -330,7 +280,7 @@ function onReadingTap(id: number) {
   const r = readings.find((x) => x.id === id);
   if (!r) return;
   if (!selecting) {
-    inspect(r);
+    editor.open(r);
     return;
   }
   if (selected.has(r.id)) selected.delete(r.id);
@@ -665,7 +615,7 @@ function showToast(message: string) {
 }
 
 // Tapping the backdrop (outside the dialog box) closes a dialog.
-for (const dialog of [inspectorEl, confirmEl, exportMenuEl]) {
+for (const dialog of [confirmEl, exportMenuEl]) {
   dialog.addEventListener('click', (e) => {
     if (e.target === dialog) dialog.close();
   });
@@ -892,7 +842,8 @@ function fixFromPosition(pos: Position): Fix {
     longitude: pos.coords.longitude,
     accuracy: pos.coords.accuracy,
     altitude: pos.coords.altitude ?? null,
-    recordedAt: pos.timestamp,
+    // Whole milliseconds: iOS reports fractions.
+    recordedAt: Math.round(pos.timestamp),
   };
 }
 
@@ -1000,6 +951,38 @@ importBtn.addEventListener('click', () =>
 render();
 renderSelection();
 
+// The page itself doesn't scroll (capacitor.config.ts), so a focused field
+// must be brought into view within its own scrolling area, such as the
+// editor's body, and that area must end above the keyboard.
+function revealFocused() {
+  const el = document.activeElement;
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+    el.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+// Also when focus moves while the keyboard is up (e.g. Return to the next field).
+document.addEventListener('focusin', () => requestAnimationFrame(revealFocused));
+
+if (Capacitor.getPlatform() === 'ios') {
+  // The web view stays full height (resize: none), so screens that hold
+  // fields subtract --keyboard-height. Set it as the keyboard starts to
+  // appear, and reveal the field against the new layout straight away.
+  const root = document.documentElement;
+  Keyboard.addListener('keyboardWillShow', ({ keyboardHeight }) => {
+    root.style.setProperty('--keyboard-height', `${keyboardHeight}px`);
+    revealFocused();
+  });
+  Keyboard.addListener('keyboardWillHide', () => {
+    root.style.setProperty('--keyboard-height', '0px');
+  });
+  // Keep the keyboard's accessory bar, which the plugin hides by default.
+  Keyboard.setAccessoryBarVisible({ isVisible: true });
+} else {
+  // Android resizes the web view itself.
+  window.addEventListener('resize', revealFocused);
+}
+
 // Watch location only while the app is in the foreground.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') startWatching();
@@ -1007,11 +990,12 @@ document.addEventListener('visibilitychange', () => {
 });
 if (document.visibilityState === 'visible') startWatching();
 
-// Open the database and show any previously saved readings on startup. The
-// native splash screen stays up until then (launchAutoHide is off), so the
-// user never sees a blank web view.
+// Load Temporal if needed, open the database and show any previously saved
+// readings on startup. The native splash screen stays up until then
+// (launchAutoHide is off), so the user never sees a blank web view.
 (async () => {
   try {
+    await initTime();
     store = await getStore();
     await refreshHistory();
   } catch (err) {

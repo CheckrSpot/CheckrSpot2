@@ -6,7 +6,7 @@ Each reading gets a short **region** string (e.g. `US-AZ, Pima Co.`) from an
 online reverse-geocoding service. It is printed as the first line of the
 label's locality block. The app is often used without a network connection,
 so lookups never happen at capture time. They run only when the user opens a
-reading in the inspector or asks for labels.
+reading in the editor or asks for labels.
 
 ## Background and decisions
 
@@ -27,7 +27,7 @@ Other decisions:
 - The full service response is stored so a future JSON export can include it.
 - No periodic or network-triggered lookups, so `@capacitor/network` isn't
   needed.
-- The inspector looks up only the reading it shows. Labels looks up the
+- The editor looks up only the reading it shows. Labels looks up the
   selected readings.
 - The app depends only on a small interface that hides the service and its
   timing, so the service can be replaced later.
@@ -99,15 +99,21 @@ const geocoder: ReverseGeocoder = new NominatimGeocoder();
 The helper `resolvePlace(r)` calls `geocoder.lookup(r.latitude, r.longitude)`,
 then `store.setPlace(r.id, place)`, and resolves with the updated reading.
 
-### Inspector
+### Editor
 
-- A new **Region** row is added.
-- If the reading has no place yet, the row shows "Looking up…" and
-  `resolvePlace` runs for **that reading only**.
-- When the lookup resolves, the row updates, but only if the inspector still
-  shows that reading.
-- When it fails, the row shows "—" with no error message. The lookup is
-  tried again the next time that reading is opened.
+(This was first written for the read-only inspector, which the editor
+replaced.)
+
+- If the reading has no place yet, the Region field shows the placeholder
+  "Looking up…" and `resolvePlace` runs for **that reading only**.
+- When the lookup resolves, the field fills in, but only if the editor still
+  shows that reading and the user hasn't typed a region.
+- When it fails, the field is left empty with no error message. The lookup
+  is tried again the next time that reading is opened.
+- A region typed in the editor is saved with `place_source` `manual` and no
+  details; lookups skip it like any other place. Clearing the field resets
+  the place to null, so it is looked up again. Changing the coordinates also
+  resets a looked-up (not manual) place.
 
 ### Labels sheet
 
@@ -199,7 +205,7 @@ Nothing else changes. Stored rows keep their original `place_source`.
 
 ## Ordering example
 
-The user inspects a reading (one request queued), closes the inspector,
+The user opens a reading (one request queued), closes the editor,
 selects four readings and taps Labels. The four join the same queue behind the
-inspector's single request, so they wait at most about 1.5 s extra. Plain
+editor's single request, so they wait at most about 1.5 s extra. Plain
 first-come, first-served order is enough; there's no priority handling.

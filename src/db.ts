@@ -29,7 +29,10 @@ export interface Reading {
   collector: string | null;
   /** From reverse geocoding, e.g. "US-AZ, Pima Co."; null until looked up, or if the service had no name. */
   region: string | null;
-  /** The reverse-geocoding result, kept for export; null until looked up. */
+  /**
+   * The reverse-geocoding result, kept for export; null until looked up.
+   * `source` is `manual`, with null details, when the user typed the region.
+   */
   place: Pick<Place, 'source' | 'details'> | null;
 }
 
@@ -46,6 +49,8 @@ export interface ReadingsStore {
   getReadings(limit?: number, offset?: number): Promise<Reading[]>;
   getReadingCount(): Promise<number>;
   deleteReadings(ids: number[]): Promise<void>;
+  /** Replace every field of the reading with this id. */
+  updateReading(r: Reading): Promise<void>;
   setPlace(id: number, place: Place): Promise<void>;
 }
 
@@ -188,6 +193,32 @@ class SqliteReadingsStore implements ReadingsStore {
     await this.conn().run(`DELETE FROM readings WHERE id IN (${placeholders});`, ids);
   }
 
+  async updateReading(r: Reading): Promise<void> {
+    await this.conn().run(
+      `UPDATE readings
+          SET latitude = ?, longitude = ?, accuracy = ?, altitude = ?, recorded_at = ?, code = ?,
+              locality = ?, locality2 = ?, taxon = ?, collector = ?,
+              region = ?, place_source = ?, place_details = ?
+        WHERE id = ?;`,
+      [
+        r.latitude,
+        r.longitude,
+        r.accuracy,
+        r.altitude,
+        r.recordedAt,
+        r.code,
+        r.locality,
+        r.locality2,
+        r.taxon,
+        r.collector,
+        r.region,
+        r.place?.source ?? null,
+        r.place ? JSON.stringify(r.place.details) : null,
+        r.id,
+      ],
+    );
+  }
+
   async setPlace(id: number, place: Place): Promise<void> {
     await this.conn().run(
       `UPDATE readings SET region = ?, place_source = ?, place_details = ? WHERE id = ?;`,
@@ -235,6 +266,11 @@ class WebStubReadingsStore implements ReadingsStore {
   async deleteReadings(ids: number[]): Promise<void> {
     const doomed = new Set(ids);
     this.rows = this.rows.filter((r) => !doomed.has(r.id));
+  }
+
+  async updateReading(r: Reading): Promise<void> {
+    const i = this.rows.findIndex((x) => x.id === r.id);
+    if (i >= 0) this.rows[i] = { ...r };
   }
 
   async setPlace(id: number, place: Place): Promise<void> {

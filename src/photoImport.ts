@@ -1,5 +1,6 @@
 import { registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 import { MAX_CODE_LENGTH, type Fix } from './db';
+import { fromWallTime, zoneAt } from './time';
 
 /** What the native side read from one chosen photo. Fields the photo lacks are absent. */
 export interface PickedPhoto {
@@ -52,7 +53,7 @@ export function photoReading(p: PickedPhoto): PhotoReading {
     return { problem: `QR code is longer than ${MAX_CODE_LENGTH} characters` };
   }
   if (p.latitude == null || p.longitude == null) return { problem: 'no location in the photo' };
-  const recordedAt = captureTime(p);
+  const recordedAt = captureTime(p, p.latitude, p.longitude);
   if (recordedAt == null) return { problem: 'no date in the photo' };
   return {
     code,
@@ -68,14 +69,17 @@ export function photoReading(p: PickedPhoto): PhotoReading {
 
 // When the photo was taken. Its EXIF date has no time zone of its own, so
 // prefer it with its offset, then the GPS time (UTC), and only then read it
-// as local time here, which is wrong if the photo was taken in another zone.
-function captureTime(p: PickedPhoto): number | null {
+// as local time in the zone at the photo's location.
+function captureTime(p: PickedPhoto, latitude: number, longitude: number): number | null {
   const m = p.dateTimeOriginal?.match(/^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
   if (m && p.offsetTimeOriginal && /^[+-]\d{2}:\d{2}$/.test(p.offsetTimeOriginal)) {
     const t = Date.parse(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}${p.offsetTimeOriginal}`);
     if (!Number.isNaN(t)) return t;
   }
   if (p.gpsTimestamp != null) return p.gpsTimestamp;
-  if (m) return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
+  if (m) {
+    const zone = zoneAt(latitude, longitude);
+    return fromWallTime(`${m[1]}-${m[2]}-${m[3]}`, `${m[4]}:${m[5]}`, +m[6] * 1000, zone);
+  }
   return null;
 }

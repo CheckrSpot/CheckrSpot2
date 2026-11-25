@@ -2,6 +2,8 @@
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light dark;
   --bg: #f5f6f8;
+  /* Behind the editor's cards: --bg about 10% darker, for contrast. */
+  --screen-bg: #dcdde0;
   --card: #ffffff;
   --fg: #1a1a2e;
   --muted: #6b7280;
@@ -18,6 +20,7 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0f1117;
+    --screen-bg: #0a0c10;
     --card: #1a1d27;
     --fg: #f3f4f6;
     --muted: #9ca3af;
@@ -293,42 +296,6 @@ button:hover:not(:disabled) {
   margin-left: 25px;
 }
 
-/* Code on the left, taxon on the right. */
-.split-title {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.result {
-  margin: 0 0 1.25rem;
-  display: grid;
-}
-
-.result > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.55rem 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.result > div:last-child {
-  border-bottom: none;
-}
-
-dt {
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
-dd {
-  margin: 0;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-}
-
 /* Sit near the top so the on-screen keyboard doesn't cover the fields. */
 .details {
   margin-top: calc(env(safe-area-inset-top) + 2rem);
@@ -343,7 +310,8 @@ dd {
 }
 
 /* 16px or larger, or iOS zooms the page when the field is focused. */
-.details-form input {
+.details-form input,
+.editor-body input {
   padding: 0.6rem 0.7rem;
   font: inherit;
   font-size: 1rem;
@@ -353,7 +321,8 @@ dd {
   border-radius: 0.5rem;
 }
 
-.details-form input:focus {
+.details-form input:focus,
+.editor-body input:focus {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
 }
@@ -420,8 +389,10 @@ dd {
   animation: sheet-out 0.25s ease-in forwards;
 }
 
+/* Transparent, as for the editor: dimming would flash the list as the sheet
+   slides in and out. */
 .sheet::backdrop {
-  background: rgba(0, 0, 0, 0.45);
+  background: transparent;
 }
 
 @keyframes sheet-in {
@@ -481,6 +452,300 @@ dd {
   color: var(--muted);
   font-size: 0.85rem;
   text-align: center;
+}
+
+/* Reading editor: full-screen, slides in from the right like an iOS
+   navigation push (and follows the finger when swiped back). Shares
+   .sheet-bar with the labels sheet. */
+.screen {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  color: var(--fg);
+  background: var(--screen-bg);
+  border: none;
+  /* Above the iOS keyboard, so the focused field can scroll into view. */
+  height: calc(100% - var(--keyboard-height, 0px));
+  transform: translateX(100%);
+  transition: transform 0.3s ease-out;
+}
+
+.screen[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.screen.shown {
+  transform: none;
+}
+
+.screen.dragging {
+  transition: none;
+}
+
+/* Transparent: it only blocks taps on the list. Dimming would switch on and
+   off at once, flashing the list as the editor slides in and out. */
+.screen::backdrop {
+  background: transparent;
+}
+
+.editor-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 1rem 1rem max(1rem, env(safe-area-inset-bottom));
+}
+
+/* The outer element's height animates when the groups collapse for a
+   chooser; the card inside keeps its size. */
+.field-group {
+  max-width: 26rem;
+  margin: 0 auto 0.75rem;
+  overflow: hidden;
+  transition:
+    height 0.3s ease,
+    margin 0.3s ease,
+    opacity 0.3s ease;
+}
+
+.field-group.collapsed {
+  margin-bottom: 0;
+  opacity: 0;
+}
+
+.group-card {
+  padding: 0.75rem 1rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.group-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 0.5rem;
+}
+
+.group-title {
+  font-weight: 600;
+}
+
+.zone {
+  margin-left: 0.35rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 400;
+}
+
+.choose-btn {
+  padding: 0.25rem 0;
+}
+
+.choosing .choose-btn {
+  visibility: hidden;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.editor-body label {
+  display: grid;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.editor-body label + label,
+.field-row + label {
+  margin-top: 0.75rem;
+}
+
+.editor-body input {
+  width: 100%;
+  min-width: 0;
+}
+
+/* While choosing, the fields show the chooser's values and can't be edited. */
+.choosing input {
+  background: transparent;
+  border-color: transparent;
+}
+
+/* A chooser slides up from the bottom, below its group (--chooser-top is
+   set when it opens). */
+.chooser {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: calc(100% - var(--chooser-top, 0px));
+  display: flex;
+  flex-direction: column;
+  padding-bottom: env(safe-area-inset-bottom);
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  border-radius: 1rem 1rem 0 0;
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.12);
+  transform: translateY(100%);
+  visibility: hidden;
+  transition:
+    transform 0.3s ease,
+    visibility 0s 0.3s;
+}
+
+.chooser.open {
+  transform: none;
+  visibility: visible;
+  transition: transform 0.3s ease;
+}
+
+.chooser-bar {
+  flex: none;
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.chooser-bar .text-btn:last-child {
+  font-weight: 600;
+}
+
+.chooser-body {
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem 1rem;
+}
+
+/* Cally's calendar, styled through its custom properties and parts. */
+.calendar {
+  display: block;
+  width: 100%;
+  max-width: 22rem;
+  --color-accent: var(--accent);
+  --color-text-on-accent: #fff;
+}
+
+.calendar calendar-month {
+  display: block;
+  width: 100%;
+}
+
+calendar-month::part(table) {
+  width: 100%;
+}
+
+calendar-month::part(button) {
+  width: 2.4rem;
+  height: 2.4rem;
+  margin: 0 auto;
+  font-size: 1rem;
+  border-radius: 50%;
+}
+
+calendar-month::part(today) {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+calendar-month::part(selected) {
+  color: #fff;
+}
+
+.calendar::part(heading) {
+  font-size: 1.06rem;
+  font-weight: 600;
+}
+
+.calendar::part(previous),
+.calendar::part(next) {
+  width: 2.5rem;
+  height: 2.5rem;
+  color: var(--accent);
+  border-radius: 50%;
+}
+
+/* Hour and minute wheels: three rows visible, the middle one selected and
+   marked by a band behind it. */
+.wheels {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.75rem;
+}
+
+.wheels::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2.5rem;
+  transform: translateY(-50%);
+  background: var(--border);
+  border-radius: 0.5rem;
+}
+
+.wheel {
+  position: relative;
+  width: 4rem;
+  height: 7.5rem;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+}
+
+.wheel::-webkit-scrollbar {
+  display: none;
+}
+
+.wheel-item {
+  height: 2.5rem;
+  line-height: 2.5rem;
+  text-align: center;
+  font-size: 1.4rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  scroll-snap-align: center;
+  cursor: pointer;
+}
+
+.wheel-item.current {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.wheel-colon {
+  position: relative;
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .screen,
+  .field-group,
+  .chooser,
+  .chooser.open {
+    transition: none;
+  }
 }
 
 /* Copy/Download format picker: two options in one rounded strip, iOS-style. */

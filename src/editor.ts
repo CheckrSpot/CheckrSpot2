@@ -1,0 +1,585 @@
+import 'cally';
+import { MAX_CODE_LENGTH, type Reading } from './db';
+import { fromWallTime, parseWallTime, wallTime, zoneAt, zoneName } from './time';
+
+// The reading editor: a full-screen view that slides in from the right, with
+// every field editable as text. Fields with a richer editor (a "chooser")
+// are grouped under a Choose button. Choosing collapses the other groups,
+// leaving that group at the top, and slides the chooser up from the bottom;
+// the group's fields then follow the chooser, read-only, until Done (keep)
+// or Cancel (restore). Swipe in from the left edge, or Cancel, to close.
+
+/** What the editor needs from the app. */
+export interface EditorHost {
+  /** Look up the reading's region and save it; resolves with the updated reading. */
+  lookUpPlace(r: Reading): Promise<Reading>;
+  /** Save the edited reading (and refresh the list). */
+  save(r: Reading): Promise<void>;
+}
+
+// Matches the transitions in style.css.
+const SLIDE_MS = 300;
+
+// How close to the left edge a swipe must start, and how far (as a fraction
+// of the width) or fast (px/ms) it must go, to close the editor.
+const EDGE_PX = 24;
+const CLOSE_DISTANCE = 0.35;
+const CLOSE_VELOCITY = 0.5;
+
+const pad = (n: number) => String(n).padStart(2, '0');
+
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+const afterSlide = (fn: () => void) => setTimeout(fn, reducedMotion() ? 0 : SLIDE_MS);
+
+// One collapsible group of fields. The outer element's height animates; the
+// card inside it keeps its padding, so its height can be measured.
+const group = (name: string, title: string | null, content: string, chooser = false) => `
+  <div class="field-group" data-group="${name}">
+    <div class="group-card">
+      ${
+        title
+          ? `<div class="group-head">
+              <span class="group-title">${title}</span>
+              ${chooser ? `<button type="button" class="text-btn choose-btn">Choose</button>` : ''}
+            </div>`
+          : ''
+      }
+      ${content}
+    </div>
+  </div>`;
+
+const MARKUP = `
+  <dialog id="editor" class="screen" aria-labelledby="editor-title">
+    <header class="sheet-bar">
+      <button id="editor-cancel" type="button" class="text-btn">Cancel</button>
+      <h2 id="editor-title"></h2>
+      <button id="editor-save" type="button" class="text-btn">Save</button>
+    </header>
+    <form class="editor-body" novalidate>
+      ${group(
+        'code',
+        null,
+        `<label>ID<input id="ed-code" type="text" maxlength="${MAX_CODE_LENGTH}"
+          autocapitalize="off" autocorrect="off" spellcheck="false" /></label>`,
+      )}
+      ${group(
+        'taxon',
+        null,
+        `<label>Taxon<input id="ed-taxon" type="text" autocapitalize="sentences"
+          autocorrect="off" spellcheck="false" /></label>`,
+      )}
+      ${group(
+        'when',
+        'Date and time <span id="ed-zone" class="zone"></span>',
+        `<div class="field-row">
+          <label>Date<input id="ed-date" type="text" placeholder="yyyy-mm-dd"
+            autocorrect="off" spellcheck="false" /></label>
+          <label>Time<input id="ed-time" type="text" placeholder="hh:mm"
+            autocorrect="off" spellcheck="false" /></label>
+        </div>`,
+        true,
+      )}
+      ${group(
+        'where',
+        'Location',
+        `<div class="field-row">
+          <label>Latitude<input id="ed-lat" type="text" autocorrect="off" spellcheck="false" /></label>
+          <label>Longitude<input id="ed-lng" type="text" autocorrect="off" spellcheck="false" /></label>
+        </div>
+        <label>Accuracy (m)<input id="ed-acc" type="text" inputmode="decimal"
+          placeholder="Unknown" /></label>`,
+      )}
+      ${group(
+        'altitude',
+        null,
+        `<label>Altitude (m)<input id="ed-alt" type="text" autocorrect="off"
+          spellcheck="false" placeholder="Unknown" /></label>`,
+      )}
+      ${group(
+        'region',
+        null,
+        `<label>Region<input id="ed-region" type="text" autocapitalize="words"
+          autocorrect="off" spellcheck="false" /></label>`,
+      )}
+      ${group(
+        'locality',
+        null,
+        `<label>Locality
+          <input id="ed-locality" type="text" autocapitalize="sentences" />
+          <input id="ed-locality2" type="text" autocapitalize="sentences"
+            aria-label="Locality, second line" />
+        </label>`,
+      )}
+      ${group(
+        'collector',
+        null,
+        `<label>Collector<input id="ed-collector" type="text" autocapitalize="words"
+          autocorrect="off" spellcheck="false" /></label>`,
+      )}
+    </form>
+    <section id="when-chooser" class="chooser" aria-label="Choose date and time">
+      <header class="chooser-bar">
+        <button id="when-cancel" type="button" class="text-btn">Cancel</button>
+        <button id="when-done" type="button" class="text-btn">Done</button>
+      </header>
+      <div class="chooser-body">
+        <calendar-date id="ed-calendar" class="calendar" first-day-of-week="0">
+          <svg slot="previous" class="icon" viewBox="0 0 24 24" aria-label="Previous month">
+            <polyline points="15 18 9 12 15 6" />
+          </svg>
+          <svg slot="next" class="icon" viewBox="0 0 24 24" aria-label="Next month">
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+          <calendar-month></calendar-month>
+        </calendar-date>
+        <div class="wheels">
+          <div id="ed-hours" class="wheel" aria-label="Hour"></div>
+          <span class="wheel-colon" aria-hidden="true">:</span>
+          <div id="ed-minutes" class="wheel" aria-label="Minute"></div>
+        </div>
+      </div>
+    </section>
+  </dialog>
+  <dialog id="confirm-discard" class="inspector" aria-labelledby="discard-title">
+    <h2 id="discard-title">Discard changes?</h2>
+    <form method="dialog" class="dialog-actions">
+      <button type="submit" value="keep" class="secondary-btn">Keep editing</button>
+      <button type="submit" value="discard" class="danger-btn">Discard</button>
+    </form>
+  </dialog>
+`;
+
+/** A scrolling column of numbers that snaps to one, like an iOS picker wheel. */
+interface Wheel {
+  value: number;
+  /** Scroll to `value`; call while the wheel is laid out. */
+  show(value: number): void;
+}
+
+function makeWheel(el: HTMLElement, count: number, onChange: (value: number) => void): Wheel {
+  const items = Array.from({ length: count }, (_, i) => {
+    const item = document.createElement('div');
+    item.className = 'wheel-item';
+    item.textContent = pad(i);
+    item.addEventListener('click', () => {
+      el.scrollTo({ top: i * item.offsetHeight, behavior: reducedMotion() ? 'auto' : 'smooth' });
+    });
+    return item;
+  });
+  // One empty row above and below, so the first and last numbers can reach the middle.
+  const spacer = () => {
+    const div = document.createElement('div');
+    div.className = 'wheel-item';
+    return div;
+  };
+  el.append(spacer(), ...items, spacer());
+  const wheel: Wheel = {
+    value: 0,
+    show(value) {
+      wheel.value = value;
+      el.scrollTop = value * items[0].offsetHeight;
+      highlight();
+    },
+  };
+  const highlight = () => items.forEach((item, i) => item.classList.toggle('current', i === wheel.value));
+  el.addEventListener('scroll', () => {
+    const i = Math.round(el.scrollTop / items[0].offsetHeight);
+    const value = Math.max(0, Math.min(count - 1, i));
+    if (value === wheel.value) return;
+    wheel.value = value;
+    highlight();
+    onChange(value);
+  });
+  return wheel;
+}
+
+export function createEditor(host: EditorHost): { open(r: Reading): void } {
+  document.querySelector('#app')!.insertAdjacentHTML('beforeend', MARKUP);
+  const q = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
+  const editorEl = q<HTMLDialogElement>('#editor');
+  const discardEl = q<HTMLDialogElement>('#confirm-discard');
+  const form = q<HTMLFormElement>('.editor-body');
+  const cancelBtn = q<HTMLButtonElement>('#editor-cancel');
+  const saveBtn = q<HTMLButtonElement>('#editor-save');
+  const input = (id: string) => q<HTMLInputElement>(`#ed-${id}`);
+  const codeIn = input('code');
+  const taxonIn = input('taxon');
+  const dateIn = input('date');
+  const timeIn = input('time');
+  const latIn = input('lat');
+  const lngIn = input('lng');
+  const accIn = input('acc');
+  const altIn = input('alt');
+  const regionIn = input('region');
+  const localityIn = input('locality');
+  const locality2In = input('locality2');
+  const collectorIn = input('collector');
+  const inputs = [...form.querySelectorAll('input')];
+  const groups = [...form.querySelectorAll<HTMLElement>('.field-group')];
+  const whenGroup = q<HTMLElement>('[data-group="when"]');
+  const whenChooser = q<HTMLElement>('#when-chooser');
+  const calendar = q<HTMLElement & { value: string; focusedDate?: string }>('#ed-calendar');
+
+  // The reading being edited, as saved (its region is filled in if a lookup
+  // finishes while the editor is open), and each field's value as first shown.
+  let original: Reading | null = null;
+  const initial = new Map<HTMLInputElement, string>();
+  const changed = (el: HTMLInputElement) => el.value !== initial.get(el);
+  const dirty = () => inputs.some(changed);
+
+  // Whether a chooser is open, and its group's values from before it opened.
+  let choosing = false;
+  let beforeChoosing: string[] = [];
+
+  function updateSave() {
+    saveBtn.disabled = choosing || !dirty();
+  }
+
+  // The zone the date and time are in, from the coordinates as typed.
+  function updateZone() {
+    if (!original) return;
+    const lat = Number(latIn.value);
+    const lng = Number(lngIn.value);
+    const zone =
+      latIn.value.trim() && lngIn.value.trim() && Number.isFinite(lat) && Number.isFinite(lng)
+        ? zoneAt(lat, lng)
+        : zoneAt(original.latitude, original.longitude);
+    const at = fromWallTime(dateIn.value, timeIn.value, 0, zone) ?? original.recordedAt;
+    q('#ed-zone').textContent = zoneName(zone, at);
+  }
+
+  function open(r: Reading) {
+    original = r;
+    const { date, time } = wallTime(r.recordedAt, zoneAt(r.latitude, r.longitude));
+    codeIn.value = r.code;
+    taxonIn.value = r.taxon ?? '';
+    dateIn.value = date;
+    timeIn.value = time;
+    latIn.value = r.latitude.toFixed(5);
+    lngIn.value = r.longitude.toFixed(5);
+    accIn.value = r.accuracy != null ? r.accuracy.toFixed(0) : '';
+    altIn.value = r.altitude != null ? r.altitude.toFixed(0) : '';
+    regionIn.value = r.region ?? '';
+    localityIn.value = r.locality ?? '';
+    locality2In.value = r.locality2 ?? '';
+    collectorIn.value = r.collector ?? '';
+    for (const el of inputs) initial.set(el, el.value);
+    q('#editor-title').textContent = r.code || 'Reading';
+    regionIn.placeholder = '';
+    if (!r.place) {
+      regionIn.placeholder = 'Looking up…';
+      host.lookUpPlace(r).then(
+        (u) => {
+          if (original?.id !== u.id) return;
+          original = { ...original, region: u.region, place: u.place };
+          // Unless the user has started typing a region of their own.
+          if (!changed(regionIn)) {
+            regionIn.value = u.region ?? '';
+            initial.set(regionIn, regionIn.value);
+          }
+          regionIn.placeholder = '';
+          updateSave();
+        },
+        () => {
+          if (original?.id === r.id) regionIn.placeholder = '';
+        },
+      );
+    }
+    updateZone();
+    updateSave();
+    form.scrollTop = 0;
+    editorEl.showModal();
+    // Start from off-screen, so adding .shown slides the editor in.
+    void editorEl.offsetWidth;
+    editorEl.classList.add('shown');
+  }
+
+  // Slide out, then close (unless it has been opened again meanwhile).
+  function slideOut() {
+    editorEl.classList.remove('shown');
+    afterSlide(() => {
+      if (!editorEl.classList.contains('shown')) editorEl.close();
+    });
+  }
+
+  function confirmDiscard(): Promise<boolean> {
+    discardEl.returnValue = '';
+    discardEl.showModal();
+    return new Promise((resolve) => {
+      discardEl.addEventListener('close', () => resolve(discardEl.returnValue === 'discard'), {
+        once: true,
+      });
+    });
+  }
+
+  async function requestClose() {
+    if (choosing) {
+      endChoosing(false);
+      return;
+    }
+    if (dirty() && !(await confirmDiscard())) return;
+    slideOut();
+  }
+
+  editorEl.addEventListener('close', () => {
+    editorEl.classList.remove('shown');
+    if (choosing) endChoosing(false);
+    original = null;
+  });
+
+  // Escape, and Android's back gesture.
+  editorEl.addEventListener('cancel', (e) => {
+    e.preventDefault();
+    requestClose();
+  });
+
+  cancelBtn.addEventListener('click', requestClose);
+  saveBtn.addEventListener('click', save);
+  form.addEventListener('input', () => {
+    updateSave();
+    updateZone();
+  });
+
+  // Return moves to the next field; on the last one it dismisses the keyboard.
+  form.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || !(e.target instanceof HTMLInputElement)) return;
+    e.preventDefault();
+    const next = inputs[inputs.indexOf(e.target) + 1];
+    if (next) next.focus();
+    else e.target.blur();
+  });
+
+  // The edited reading, or null (after telling the user) if a field is invalid.
+  function readForm(r: Reading): Reading | null {
+    const fail = (el: HTMLInputElement, message: string) => {
+      alert(message);
+      el.focus();
+      return null;
+    };
+    const text = (el: HTMLInputElement) => el.value.trim() || null;
+    // A field left as shown keeps the stored value, which has more precision
+    // than the text. Blank is null; NaN means it isn't a number.
+    const number = (el: HTMLInputElement, stored: number | null) => {
+      if (!changed(el)) return stored;
+      const s = el.value.trim().replace(',', '.').replace(/°$/, '');
+      return s === '' ? null : Number(s);
+    };
+
+    const latitude = number(latIn, r.latitude);
+    if (latitude == null || !(Math.abs(latitude) <= 90)) {
+      return fail(latIn, 'Latitude must be a number from -90 to 90.');
+    }
+    const longitude = number(lngIn, r.longitude);
+    if (longitude == null || !(Math.abs(longitude) <= 180)) {
+      return fail(lngIn, 'Longitude must be a number from -180 to 180.');
+    }
+    const accuracy = number(accIn, r.accuracy);
+    if (accuracy != null && !(accuracy >= 0)) {
+      return fail(accIn, 'Accuracy must be a number of metres, or blank.');
+    }
+    const altitude = number(altIn, r.altitude);
+    if (altitude != null && Number.isNaN(altitude)) {
+      return fail(altIn, 'Altitude must be a number of metres, or blank.');
+    }
+    const moved = latitude !== r.latitude || longitude !== r.longitude;
+
+    // The date and time are local to the (possibly new) location, so moving a
+    // reading keeps its wall-clock time. Seconds are kept unless the time
+    // itself was changed.
+    let recordedAt = r.recordedAt;
+    if (changed(dateIn) || changed(timeIn) || moved) {
+      const seconds = changed(timeIn)
+        ? 0
+        : wallTime(r.recordedAt, zoneAt(r.latitude, r.longitude)).subMinute;
+      const t = fromWallTime(dateIn.value, timeIn.value, seconds, zoneAt(latitude, longitude));
+      if (t == null) {
+        const badDate = parseWallTime(dateIn.value, '00:00') == null;
+        return fail(
+          badDate ? dateIn : timeIn,
+          'Enter the date as yyyy-mm-dd and the time as hh:mm (24-hour).',
+        );
+      }
+      recordedAt = t;
+    }
+
+    // A typed region is kept as a manual place, which lookups leave alone;
+    // clearing it means "look it up again". Moving the reading drops a
+    // looked-up region, which no longer applies.
+    let { region, place } = r;
+    if (changed(regionIn)) {
+      region = text(regionIn);
+      place = region ? { source: 'manual', details: null } : null;
+    } else if (moved && place?.source !== 'manual') {
+      region = null;
+      place = null;
+    }
+
+    return {
+      ...r,
+      code: codeIn.value.trim(),
+      latitude,
+      longitude,
+      accuracy,
+      altitude,
+      recordedAt,
+      region,
+      place,
+      locality: text(localityIn),
+      locality2: text(locality2In),
+      taxon: text(taxonIn),
+      collector: text(collectorIn),
+    };
+  }
+
+  async function save() {
+    if (!original) return;
+    const updated = readForm(original);
+    if (!updated) return;
+    saveBtn.disabled = true;
+    try {
+      await host.save(updated);
+      slideOut();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(`Changes not saved: ${msg}`);
+      updateSave();
+    }
+  }
+
+  // Collapse every group but `keep` (or expand them again), animating each
+  // one's height between its natural height and zero.
+  function collapseGroups(keep: HTMLElement, collapse: boolean) {
+    for (const g of groups) {
+      if (g === keep) continue;
+      if (collapse) {
+        g.style.height = `${g.offsetHeight}px`;
+        void g.offsetHeight;
+        g.classList.add('collapsed');
+        g.style.height = '0px';
+      } else {
+        g.classList.remove('collapsed');
+        g.style.height = `${g.scrollHeight}px`;
+        afterSlide(() => {
+          if (!g.classList.contains('collapsed')) g.style.height = '';
+        });
+      }
+    }
+  }
+
+  // The date and time chooser: Cally's calendar and two wheels.
+  const setTime = () => {
+    timeIn.value = `${pad(hours.value)}:${pad(minutes.value)}`;
+    updateZone();
+  };
+  const hours = makeWheel(q('#ed-hours'), 24, setTime);
+  const minutes = makeWheel(q('#ed-minutes'), 60, setTime);
+  calendar.addEventListener('change', () => {
+    dateIn.value = calendar.value;
+    updateZone();
+  });
+
+  function startChoosing() {
+    if (!original || choosing) return;
+    choosing = true;
+    beforeChoosing = [dateIn.value, timeIn.value];
+    (document.activeElement as HTMLElement | null)?.blur();
+    for (const el of inputs) el.readOnly = true;
+    cancelBtn.disabled = true;
+    updateSave();
+    // Start from the fields as typed, or the saved time if they don't parse;
+    // either way the fields now show what the chooser shows.
+    let parts = parseWallTime(dateIn.value, timeIn.value);
+    if (!parts) {
+      const w = wallTime(original.recordedAt, zoneAt(original.latitude, original.longitude));
+      parts = parseWallTime(w.date, w.time)!;
+    }
+    const [y, mo, d, h, mi] = parts;
+    const date = `${y}-${pad(mo)}-${pad(d)}`;
+    calendar.value = date;
+    calendar.focusedDate = date;
+    dateIn.value = date;
+    form.classList.add('choosing');
+    // Keep the chooser below the group, which ends up at the top.
+    const top = form.offsetTop + whenGroup.offsetHeight + 24;
+    editorEl.style.setProperty('--chooser-top', `${top}px`);
+    collapseGroups(whenGroup, true);
+    form.scrollTo({ top: 0, behavior: reducedMotion() ? 'auto' : 'smooth' });
+    whenChooser.classList.add('open');
+    hours.show(h);
+    minutes.show(mi);
+    setTime();
+  }
+
+  // Close the chooser, keeping its values or restoring the fields.
+  function endChoosing(keep: boolean) {
+    if (!choosing) return;
+    if (!keep) [dateIn.value, timeIn.value] = beforeChoosing;
+    choosing = false;
+    whenChooser.classList.remove('open');
+    form.classList.remove('choosing');
+    collapseGroups(whenGroup, false);
+    for (const el of inputs) el.readOnly = false;
+    cancelBtn.disabled = false;
+    updateZone();
+    updateSave();
+  }
+
+  whenGroup.querySelector('.choose-btn')!.addEventListener('click', startChoosing);
+  q('#when-cancel').addEventListener('click', () => endChoosing(false));
+  q('#when-done').addEventListener('click', () => endChoosing(true));
+
+  // Swipe in from the left edge to close, as with iOS navigation. The editor
+  // follows the finger; let go far or fast enough and it closes (asking
+  // first if there are changes), otherwise it slides back.
+  let drag: { x0: number; y0: number; t0: number; dx: number; horizontal: boolean | null } | null =
+    null;
+
+  editorEl.addEventListener(
+    'touchstart',
+    (e) => {
+      const t = e.touches[0];
+      if (choosing || e.touches.length !== 1 || t.clientX > EDGE_PX) return;
+      drag = { x0: t.clientX, y0: t.clientY, t0: e.timeStamp, dx: 0, horizontal: null };
+    },
+    { passive: true },
+  );
+
+  editorEl.addEventListener(
+    'touchmove',
+    (e) => {
+      if (!drag) return;
+      const t = e.touches[0];
+      const dx = t.clientX - drag.x0;
+      const dy = t.clientY - drag.y0;
+      if (drag.horizontal === null) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        drag.horizontal = Math.abs(dx) > Math.abs(dy);
+        if (!drag.horizontal) {
+          drag = null;
+          return;
+        }
+        editorEl.classList.add('dragging');
+      }
+      e.preventDefault();
+      drag.dx = Math.max(0, dx);
+      editorEl.style.transform = `translateX(${drag.dx}px)`;
+    },
+    { passive: false },
+  );
+
+  const endDrag = (e: TouchEvent) => {
+    const d = drag;
+    drag = null;
+    if (!d?.horizontal) return;
+    // Back under the stylesheet's control: it slides back from here, or on
+    // to closed.
+    editorEl.classList.remove('dragging');
+    editorEl.style.transform = '';
+    const velocity = d.dx / Math.max(1, e.timeStamp - d.t0);
+    if (d.dx > editorEl.offsetWidth * CLOSE_DISTANCE || velocity > CLOSE_VELOCITY) requestClose();
+  };
+  editorEl.addEventListener('touchend', endDrag);
+  editorEl.addEventListener('touchcancel', endDrag);
+
+  return { open };
+}

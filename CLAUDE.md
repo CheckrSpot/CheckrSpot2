@@ -25,6 +25,9 @@ dependencies change.
   `xcodebuild -project ios/App/App.xcodeproj -scheme CheckrSpot2 -destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO`
   (the Xcode project is `App.xcodeproj`, but the app scheme is **CheckrSpot2**).
   Don't boot or run simulators; the user tests on their own phone.
+- `tools.sh` (`iphone <udid>` / `ios` / `android <path>`) is the user's
+  build-and-deploy script, copied from `../fence-jobs`. Don't run any of
+  these commands unasked.
 
 ## Stack
 
@@ -40,12 +43,39 @@ dependencies change.
   Ionic/OutSystems live scanner), `@capacitor-community/sqlite`,
   `@capacitor/splash-screen`, `@capacitor/clipboard` (`navigator.clipboard` is
   unreliable in Android WebView).
+- `@capacitor/keyboard` with `resize: none` and iOS `scrollEnabled: false`
+  (`capacitor.config.ts`): WKWebView otherwise scrolls the whole page to
+  reveal a focused field, moving fixed headers (the editor's Cancel/Save bar)
+  off screen. On iOS, `main.ts` sets `--keyboard-height` on
+  `keyboardWillShow`/`WillHide` and screens with fields subtract it (the
+  editor's `.screen` height); it then scrolls the focused field into view,
+  and again on every `focusin`. `resize: native` was tried and was
+  unreliable: the plugin resizes the web view ~0.2 s after the keyboard has
+  finished appearing. Android resizes the web view itself, so there the
+  reveal runs on window `resize`. The plugin hides iOS's keyboard accessory
+  bar by default; `main.ts` turns it back on.
+- Web libraries: `cally` (calendar web components; falls back to `<style>`
+  where constructable stylesheets are missing), `temporal-polyfill` (loaded
+  by dynamic import only when `globalThis.Temporal` is missing; its own
+  chunk), `@photostructure/tz-lookup` (offline coordinates → IANA zone, about
+  70 KB). Types for Temporal come from TS's `ESNext.Temporal` lib.
+- `src/polyfills.ts` (imported first) adds what dependencies need beyond the
+  oldest WebViews: `Array.prototype.at` (Cally; missing before iOS 15.4 and
+  Chrome 92). Check new dependencies for such APIs.
 
 ## Files
 
-- `src/main.ts` — all UI and logic. Markup is one `app.innerHTML` template
-  (list, capture button, three `<dialog>`s), followed by plain DOM code. No
-  components or state library.
+- `src/main.ts` — UI and logic except the editor. Markup is one
+  `app.innerHTML` template (list, capture button, `<dialog>`s), followed by
+  plain DOM code. No components or state library.
+- `src/editor.ts` — the reading editor (`createEditor(host)` → `open(r)`),
+  with its own markup template appended to `#app`, and the date/time chooser
+  (Cally calendar + `makeWheel` scroll-snap wheels). `EditorHost` gives it
+  `lookUpPlace` (= `resolvePlace`) and `save` (`updateReading` + refresh).
+- `src/time.ts` — `initTime` (polyfill), `zoneAt(lat, lng)` (IANA zone or
+  null), `wallTime` / `fromWallTime` (epoch ms ↔ date, `hh:mm` and the
+  sub-minute ms in a zone; UTC when the zone is null), `parseWallTime`,
+  `zoneName` (e.g. "MST").
 - `src/db.ts` — `Reading` type, `ReadingsStore` interface, schema, and two
   implementations: SQLite on native, in-memory stub on web (`npm run dev`).
 - `src/geocoder.ts` — `Place` and `ReverseGeocoder`, the service-neutral
@@ -56,8 +86,8 @@ dependencies change.
 - `dev-docs/reverse-geocoding.md` — design of the region lookup, including
   the decisions behind it (temperature and elevation lookups dropped).
 - `src/export.ts` — `toJSON` / `toCSV` / `exportFilename` for Copy and
-  Download, and `formatReading` (local date and time, shared with labels and
-  the inspector).
+  Download, and `formatReading` (the reading's date and `hh:mm` in its own
+  zone, `Z`-suffixed when unknown; shared with labels).
 - `src/fileSaver.ts` — `FileSaver` plugin wrapper (`saveFile`); browser
   download on web.
 - `src/photoImport.ts` — `PhotoImport` plugin wrapper (`pickPhotos`, native
@@ -101,7 +131,8 @@ Table `readings` (`src/db.ts`): `id` (autoincrement row id), `latitude`,
 ms, from the fix's timestamp), `code` (text, NOT NULL, CHECK length ≤
 `MAX_CODE_LENGTH` = 25), `locality`, `locality2`, `taxon` and `collector`
 (text, null when blank), `region`, `place_source` and `place_details`
-(reverse geocoding; all null until looked up). `locality2` is the locality's second line. TS fields are camelCase (`recordedAt`); `ReadingDetails` = code +
+(reverse geocoding; all null until looked up; `place_source` is `manual`,
+with null details, for a region typed in the editor). `locality2` is the locality's second line. TS fields are camelCase (`recordedAt`); `ReadingDetails` = code +
 locality + locality2 + taxon + collector. `Fix` = latitude, longitude,
 accuracy, altitude, recordedAt; `insertReading(fix, details)` takes one, built
 from a `Position` (capture) or a photo (import).
@@ -152,7 +183,8 @@ from a `Position` (capture) or a photo (import).
   `importPhotos`): native picker, multiple selection → for each photo,
   `photoReading` requires lat/long, a capture time and at most one QR code
   (≤ 25 chars); with none, `code` is `''` (column stays NOT NULL). Time: EXIF DateTimeOriginal + OffsetTimeOriginal, else GPS
-  date/time (UTC), else DateTimeOriginal as device-local time. Photos whose
+  date/time (UTC), else DateTimeOriginal as local time in the zone at the
+  photo's coordinates. Photos whose
   code + recordedAt match an existing reading are skipped as duplicates. One
   photo picked → details dialog (as at capture; Discard drops it); several →
   saved with the remembered collector (`lastDetails`), no locality or taxon.
@@ -160,16 +192,41 @@ from a `Position` (capture) or a photo (import).
   blocking) and sends `importProgress` events before each; the app shows
   them in a modal `#import-status` dialog ("Reading photos… n of m"). Problems are listed in an alert afterwards (toast
   if none); the list then scrolls to the newest imported reading. Accuracy
-  shows "n/a" in the inspector and is left off labels when null.
+  is blank ("Unknown") in the editor and left off labels when null.
+- **Time zones**: `recorded_at` is UTC; every display, edit and export uses
+  the zone at the reading's coordinates (`zoneAt`), never the device's. The
+  user chose deriving it over storing it. Null zone (no Temporal, unknown
+  place, or a zone the WebView's Intl lacks) → UTC, times suffixed `Z`.
+  Seconds are stored but never shown or exported. `localDateTime` (device
+  time) is only for the export file name.
 - **List**: all readings, newest first. Each row shows code (bold, left) and
-  taxon (right, ellipsized). Tap opens the inspector dialog: title is code +
-  taxon; rows are Time, Date, Region, Locality (both lines in one cell), Latitude, Longitude, Accuracy,
-  Altitude, Collector.
+  taxon (right, ellipsized). Tap opens the editor (it replaced a read-only
+  inspector dialog).
+- **Editor** (`editor.ts`): full-screen `<dialog class="screen">` sliding in
+  from the right; Cancel / code title / Save (disabled until a field
+  changes). Field groups, in order: ID, Taxon, Date and time (with zone name
+  and Choose), Location (latitude, longitude, accuracy), Altitude, Region,
+  Locality (two lines), Collector. Every field is text; return moves to the
+  next. Closing with changes (Cancel, left-edge swipe, Escape / Android back
+  via the dialog's `cancel` event) asks "Discard changes?".
+  - Saving: a field left as shown keeps the stored value (text has less
+    precision). Date and time are wall-clock in the zone of the *new*
+    coordinates, so moving a reading keeps its clock time; seconds are kept
+    unless the time text changed. Typed region → manual place; cleared →
+    place null; moved coordinates drop a non-manual place.
+  - Choosers: Choose collapses the other groups (height animation on
+    `.field-group`, the card inside keeps its size), slides the chooser up
+    from the bottom (capped below the group via `--chooser-top`), makes all
+    inputs read-only and writes the chooser's values into the group's fields
+    live. Done keeps them; Cancel restores. Only date and time so far; a map
+    chooser for location and a taxon catalogue are planned.
+  - The user wants Cally for the calendar; the time is hour and minute
+    wheels (24-hour).
 - **Region lookup** (Nominatim, `zoom=9`, `accept-language=en`,
   User-Agent `CheckrSpot/2.0`, no contact email by the user's choice) runs
   only on demand, never at capture or in the background: opening the
-  inspector looks up **that reading only** (Region row shows "Looking up…",
-  then updates if still open; "—" on failure), and Labels looks up the
+  editor looks up **that reading only** (Region placeholder "Looking up…",
+  filled in if still open and not typed over), and Labels looks up the
   selected readings. `resolvePlace` in `main.ts` does lookup → `setPlace` →
   replaces the reading in `readings`; list rows look readings up by id for
   this reason.
@@ -201,8 +258,8 @@ from a `Position` (capture) or a photo (import).
   `exportRun`). Then `Clipboard.write` or `FileSaver.saveFile` (file name
   `checkrspot-yyyy-mm-dd-hhmm.json|csv`), and a brief toast (none if the save
   dialog is cancelled). Readings oldest first.
-  JSON: array of objects, keys `id` (the code), `timestamp` (ISO 8601, local
-  with offset), `date`, `time`, `latitude`, `longitude` (5 dp), `accuracy`,
+  JSON: array of objects, keys `id` (the code), `timestamp` (ISO 8601 to the
+  minute, in the reading's zone with its offset, or `Z`), `date`, `time`, `latitude`, `longitude` (5 dp), `accuracy`,
   `altitude` (whole m), `region`, `locality`, `locality2`, `taxon`,
   `collector` (verbatim), `revGeocode` (the whole `place_details`); null
   fields omitted. CSV (RFC 4180, CRLF): `id,date,time,latitude,longitude,

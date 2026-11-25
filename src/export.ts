@@ -1,10 +1,11 @@
 import type { Reading } from './db';
+import { wallTime, zoneAt } from './time';
 
 export type ExportFormat = 'json' | 'csv';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
-// Local date as `yyyy-mm-dd` and time as `hh:mm` (24-hour).
+// Device-local date as `yyyy-mm-dd` and time as `hh:mm` (24-hour).
 export function localDateTime(ms: number): { date: string; time: string } {
   const d = new Date(ms);
   return {
@@ -13,22 +14,23 @@ export function localDateTime(ms: number): { date: string; time: string } {
   };
 }
 
-export const formatReading = (r: Reading) => localDateTime(r.recordedAt);
-
-// ISO 8601 in local time with the UTC offset, e.g. 2026-10-24T14:32:05-07:00.
-function localTimestamp(ms: number): string {
-  const d = new Date(ms);
-  const offset = -d.getTimezoneOffset();
-  const sign = offset >= 0 ? '+' : '-';
-  const abs = Math.abs(offset);
-  return (
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
-    `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` +
-    `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
-  );
+// A reading's date and time (`hh:mm`), local to where it was taken. When that
+// zone is unknown they are UTC, and the time ends in "Z".
+export function formatReading(r: Reading): { date: string; time: string } {
+  const zone = zoneAt(r.latitude, r.longitude);
+  const { date, time } = wallTime(r.recordedAt, zone);
+  return { date, time: zone ? time : `${time}Z` };
 }
 
-// Same precision as the inspector and labels.
+// ISO 8601 in the reading's local time with its UTC offset, to the minute
+// (seconds are dropped, as everywhere outside the database), e.g.
+// 2026-10-24T14:32-07:00.
+function localTimestamp(r: Reading): string {
+  const { date, time, offset } = wallTime(r.recordedAt, zoneAt(r.latitude, r.longitude));
+  return `${date}T${time}${offset}`;
+}
+
+// Same precision as the editor and labels.
 const coord = (x: number) => Number(x.toFixed(5));
 
 // One object per reading; null fields are left out. `revGeocode` is the
@@ -38,7 +40,7 @@ export function toJSON(readings: Reading[]): string {
     const { date, time } = formatReading(r);
     const record: Record<string, unknown> = {
       id: r.code,
-      timestamp: localTimestamp(r.recordedAt),
+      timestamp: localTimestamp(r),
       date,
       time,
       latitude: coord(r.latitude),
