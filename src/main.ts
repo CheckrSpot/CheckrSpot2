@@ -22,6 +22,7 @@ import { FileSaver } from './fileSaver';
 import type { AreaFinder, ReverseGeocoder } from './geocoder';
 import { NominatimGeocoder } from './nominatim';
 import { exportFilename, formatReading, toCSV, toJSON, type ExportFormat } from './export';
+import { commonCollector, countCollector } from './collectors';
 import { createEditor } from './editor';
 import { initTime } from './time';
 import { PhotoImport, photoReading, type PickedPhoto } from './photoImport';
@@ -257,6 +258,7 @@ const editor = createEditor({
   async save(r) {
     if (!store) throw new Error('storage unavailable');
     await store.updateReading(r);
+    countCollector(r.collector);
     await refreshHistory();
   },
 });
@@ -745,13 +747,14 @@ async function scanQrCode(): Promise<string | null> {
   }
 }
 
-// Defaults for the next reading, taken from the last saved one: the two
-// locality lines (always saved together, since they describe one place) and
-// the collector. Kept in localStorage: losing them (the OS may clear web
-// storage) only means retyping them.
+// Defaults for the next reading's locality, taken from the last saved one:
+// the two lines, always saved together since they describe one place. (The
+// collector defaults to the most used one; see collectors.ts.) Kept in
+// localStorage: losing them (the OS may clear web storage) only means
+// retyping them.
 const LAST_DETAILS_KEY = 'lastDetails';
 
-type RememberedDetails = Pick<ReadingDetails, 'locality' | 'locality2' | 'collector'>;
+type RememberedDetails = Pick<ReadingDetails, 'locality' | 'locality2'>;
 
 function loadLastDetails(): Partial<RememberedDetails> {
   try {
@@ -761,9 +764,9 @@ function loadLastDetails(): Partial<RememberedDetails> {
   }
 }
 
-function saveLastDetails({ locality, locality2, collector }: RememberedDetails) {
+function saveLastDetails({ locality, locality2 }: RememberedDetails) {
   try {
-    localStorage.setItem(LAST_DETAILS_KEY, JSON.stringify({ locality, locality2, collector }));
+    localStorage.setItem(LAST_DETAILS_KEY, JSON.stringify({ locality, locality2 }));
   } catch {
     // Not worth bothering the user about.
   }
@@ -777,7 +780,7 @@ function askDetails(code: string): Promise<ReadingDetails | null> {
   localityInput.value = last.locality ?? '';
   locality2Input.value = last.locality2 ?? '';
   taxonInput.value = '';
-  collectorInput.value = last.collector ?? '';
+  collectorInput.value = commonCollector() ?? '';
   detailsEl.returnValue = '';
   detailsEl.showModal();
   return new Promise((resolve) => {
@@ -843,6 +846,7 @@ async function recordFix() {
   try {
     if (!store) throw new Error('storage unavailable');
     await store.insertReading(fixFromPosition(pos), details);
+    countCollector(details.collector);
     await refreshHistory();
     historyEl.parentElement!.scrollTo({ top: 0, behavior: 'smooth' });
   } catch (saveErr) {
@@ -868,7 +872,7 @@ let importing = false;
 
 // Import readings from photos, each of which needs a location and a capture
 // time, and at most one QR code (none leaves the ID empty). A single photo gets
-// the details dialog, as when capturing; several are saved with the last used
+// the details dialog, as when capturing; several are saved with the most used
 // collector and no locality or taxon.
 async function importPhotos() {
   if (importing) return;
@@ -891,7 +895,7 @@ async function importPhotos() {
   // Photos not imported, and why.
   const problems: { name: string; problem: string }[] = [];
   const toSave: { fix: Fix; details: ReadingDetails }[] = [];
-  const collector = loadLastDetails().collector ?? null;
+  const collector = commonCollector();
   // Importing a photo again would duplicate its reading.
   const seen = new Set(readings.map((r) => `${r.code}@${r.recordedAt}`));
   photos.forEach((p, i) => {
@@ -927,6 +931,7 @@ async function importPhotos() {
     if (!store) throw new Error('storage unavailable');
     for (const { fix, details } of toSave) {
       await store.insertReading(fix, details);
+      countCollector(details.collector);
       saved++;
     }
   } catch (saveErr) {

@@ -956,6 +956,61 @@ calendar-month::part(selected) {
   flex: 1;
 }
 
+/* Collector chooser: a list of names, most used first, each with its count. */
+.collector-body {
+  display: block;
+  padding-top: 0;
+}
+
+.collector-empty {
+  margin: 1.5rem 0.5rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.collector-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.collector-list button {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 0.75rem 0.25rem;
+  color: var(--fg);
+  font-weight: 400;
+  text-align: left;
+  background: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.collector-list button:hover:not(:disabled) {
+  background: var(--border);
+}
+
+.collector-list button.current {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.collector-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collector-count {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .taxon-status {
   padding: 2rem 0.5rem;
   color: var(--muted);

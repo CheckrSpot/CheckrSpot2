@@ -88,6 +88,13 @@ dependencies change.
   mechanism (`Chooser`: group, panel, fields, `begin`) and the date/time
   chooser (Cally calendar + `makeWheel` scroll-snap wheels). `EditorHost` gives it
   `lookUpPlace` (= `resolvePlace`) and `save` (`updateReading` + refresh).
+- `src/collectors.ts` — the collector tally (`localStorage` `collectors`:
+  name, count, last used). `countCollector` adds one whenever a reading is
+  saved with a collector (capture, each imported photo, editor Save, even
+  if unchanged); nothing ever subtracts, by the user's choice (counts are
+  only a rough guide). Counts cap at 100, so among capped names the most
+  recently used wins. `collectors()` (most used, then most recent, first),
+  `commonCollector()`.
 - `src/taxonChooser.ts` — the taxon chooser panel (`TAXON_CHOOSER_MARKUP`,
   included in the editor's markup; `createTaxonChooser(host)` → `begin(spot)`),
   its settings (`localStorage` `taxonChooser`) and grid.
@@ -206,10 +213,10 @@ from a `Position` (capture) or a photo (import).
     input sits under the first, inside the same Locality label, with no label
     of its own. Return in the locality lines and Taxon moves to the next field, and in Collector dismisses the keyboard
     (otherwise it would submit the form via its first button, Discard).
-    Both locality lines and Collector are prefilled from the last saved
-    reading, kept as one JSON object in `localStorage` (`lastDetails`;
-    written only on Save, blanks included). The locality lines are stored
-    as a pair because they correlate. No backdrop-tap close, so typed
+    Both locality lines are prefilled from the last saved reading, kept
+    as one JSON object in `localStorage` (`lastDetails`; written only on
+    Save, blanks included), as a pair because they correlate. Collector is
+    prefilled with the most used collector (`commonCollector`). No backdrop-tap close, so typed
     text isn't lost. Taxon has autocorrect/spellcheck off (Latin names).
     Inputs are ≥ 16px to avoid iOS focus zoom. The dialog sits near the top so
     the keyboard doesn't cover it. Native keyboard dictation works with no
@@ -222,7 +229,7 @@ from a `Position` (capture) or a photo (import).
   photo's coordinates. Photos whose
   code + recordedAt match an existing reading are skipped as duplicates. One
   photo picked → details dialog (as at capture; Discard drops it); several →
-  saved with the remembered collector (`lastDetails`), no locality or taxon.
+  saved with the most used collector, no locality or taxon.
   Native reads photos one at a time (iOS: chained completion handlers, no
   blocking) and sends `importProgress` events before each; the app shows
   them in a modal `#import-status` dialog ("Reading photos… n of m"). Problems are listed in an alert afterwards (toast
@@ -242,7 +249,7 @@ from a `Position` (capture) or a photo (import).
   changes). Field groups, in order: ID, Taxon (with Choose), Date and time
   (with zone name and Choose), Location (with Choose: latitude | longitude,
   Region, then Accuracy | Altitude | Copy), Locality (two lines),
-  Collector. Region and Altitude sit in Location because they're derived
+  Collector (with Choose). Region and Altitude sit in Location because they're derived
   from the coordinates. Copy puts "lat, lng" as typed on the clipboard (the form
   Google Maps accepts) and briefly reads "Copied". Every field is text; return moves to the
   next. Closing with changes (Cancel, left-edge swipe, Escape / Android back
@@ -278,6 +285,10 @@ from a `Position` (capture) or a photo (import).
     updates at once and the grid reloads 0.5 s after the last tap. Defaults: Butterflies
     (47224), 25 km, ±3 weeks. Choose is disabled offline (`@capacitor/network`);
     a failed request shows "Couldn't reach iNaturalist." with Retry.
+  - **Collector chooser**: a list of every collector in the tally
+    (`collectors.ts`), most used first, with counts; the current one is
+    highlighted. Tapping one puts it in Collector and closes the chooser
+    (as Done); the bar has only Cancel. Works offline.
   - **Location chooser** (fields: latitude, longitude, accuracy, altitude, region;
     Copy is hidden while it's open). MapLibre's CSS loads after ours, so
     the container rule needs two classes (`.map-wrap .location-map`) to keep

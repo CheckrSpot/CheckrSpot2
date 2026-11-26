@@ -56,15 +56,16 @@ database.
 - Tap it to open the QR scanner. Once a code is read, enter an optional
   **Locality** (two lines), **Taxon** and **Collector** (keyboard dictation works), then **Save**, or
   **Discard** to drop the reading. The location saved is the one from when you
-  tapped the button. Both locality lines and Collector start out filled in
-  with the values from the last reading you saved.
+  tapped the button. Both locality lines start out filled in with the values
+  from the last reading you saved, and Collector with the collector you've
+  used most.
 - **Import** (top left) creates readings from photos you choose from your
   library. Each photo must have a location and capture date in its metadata;
   the reading gets the photo's time, position, altitude and (when recorded)
   GPS accuracy, and the ID from the QR code in the photo (left empty if there
   is none; photos with more than one are skipped). Import one photo and the
   usual Locality / Taxon / Collector dialog appears; import several and they
-  get the last used collector, with no locality or taxon. Photos that can't be used, or whose reading is already in
+  get the collector you've used most, with no locality or taxon. Photos that can't be used, or whose reading is already in
   the list, are skipped and listed afterwards.
 - The list shows each reading's ID and taxon, newest first. Tap one to open
   the **editor**, which slides in from the right. Every field can be edited as
@@ -94,6 +95,8 @@ database.
   butterflies, 25 km and ±3 weeks, and
   your choices are remembered. Choose is greyed out without a network
   connection.
+- **Choose** next to *Collector* lists every collector you've saved a reading
+  with, most used first. Tap one to put it in the Collector field.
 - Times are always shown and edited as **local time where the reading was
   taken** (the zone, e.g. MST, is shown in the editor), wherever the phone is
   now. The zone comes from the coordinates, so moving a reading in the editor
@@ -230,6 +233,7 @@ A failed save is reported in an alert rather than crashing the app.
 - `src/editor.ts` — the reading editor and its date and time chooser
 - `src/locationChooser.ts` — the location chooser's map
 - `src/taxonChooser.ts` — the taxon chooser and its settings
+- `src/collectors.ts` — the remembered collectors and how often each is used
 - `src/inaturalist.ts` — the iNaturalist API client
 - `src/elevation.ts` — ground elevation from Open-Meteo
 - `src/motion.ts` — animation timing shared by the editor and choosers

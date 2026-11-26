@@ -1,6 +1,7 @@
 import 'cally';
 import { Clipboard } from '@capacitor/clipboard';
 import { Network, type ConnectionStatus } from '@capacitor/network';
+import { collectors } from './collectors';
 import { MAX_CODE_LENGTH, type Reading } from './db';
 import type { Bounds, Place } from './geocoder';
 import type { LatLng, LocationChooser, LocationChooserHost } from './locationChooser';
@@ -14,8 +15,9 @@ import { fromWallTime, parseWallTime, wallTime, zoneAt, zoneName } from './time'
 // are grouped under a Choose button. Choosing collapses the other groups,
 // leaving that group at the top, and slides the chooser up from the bottom;
 // the group's fields then follow the chooser, read-only, until it is done
-// (keep) or cancelled (restore). The date and time chooser is here; the
-// taxon and location choosers are in taxonChooser.ts and locationChooser.ts.
+// (keep) or cancelled (restore). The date and time and collector choosers
+// are here; the taxon and location choosers are in taxonChooser.ts and
+// locationChooser.ts.
 // Swipe in from the left edge, or Cancel, to close the editor.
 
 /** What the editor needs from the app. */
@@ -121,9 +123,10 @@ const MARKUP = `
       )}
       ${group(
         'collector',
-        null,
-        `<label>Collector<input id="ed-collector" type="text" autocapitalize="words"
-          autocorrect="off" spellcheck="false" /></label>`,
+        'Collector',
+        `<input id="ed-collector" type="text" autocapitalize="words" autocorrect="off"
+          spellcheck="false" aria-label="Collector" />`,
+        true,
       )}
     </form>
     <section id="when-chooser" class="chooser" aria-label="Choose date and time">
@@ -149,6 +152,19 @@ const MARKUP = `
       </div>
     </section>
     ${TAXON_CHOOSER_MARKUP}
+    <section id="collector-chooser" class="chooser" aria-label="Choose collector">
+      <header class="chooser-bar titled-bar">
+        <button id="collector-cancel" type="button" class="text-btn">Cancel</button>
+        <span class="chooser-title">Collectors</span>
+        <span></span>
+      </header>
+      <div class="chooser-body collector-body">
+        <p id="collector-empty" class="collector-empty" hidden>
+          Collectors appear here once readings are saved with them.
+        </p>
+        <ul id="collector-list" class="collector-list"></ul>
+      </div>
+    </section>
     <section id="where-chooser" class="chooser tall" aria-label="Choose location">
       <header class="chooser-bar titled-bar">
         <button id="where-cancel" type="button" class="text-btn">Cancel</button>
@@ -645,6 +661,46 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
       taxonPicker.begin({ latitude, longitude, year, month, day });
     },
   };
+
+  // The collector chooser: every collector saved so far, most used first.
+  // Tapping one picks it.
+  const collectorList = q<HTMLUListElement>('#collector-list');
+  const collectorChooser: Chooser = {
+    group: q('[data-group="collector"]'),
+    panel: q('#collector-chooser'),
+    fields: [collectorIn],
+    begin() {
+      const all = collectors();
+      q<HTMLElement>('#collector-empty').hidden = all.length > 0;
+      collectorList.replaceChildren(
+        ...all.map(({ name, count }) => {
+          const li = document.createElement('li');
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.classList.toggle('current', name === collectorIn.value.trim());
+          const nameEl = document.createElement('span');
+          nameEl.className = 'collector-name';
+          nameEl.textContent = name;
+          const countEl = document.createElement('span');
+          countEl.className = 'collector-count';
+          countEl.textContent = String(count);
+          btn.append(nameEl, countEl);
+          btn.addEventListener('click', () => {
+            collectorIn.value = name;
+            endChoosing(true);
+          });
+          li.append(btn);
+          return li;
+        }),
+      );
+      collectorList.scrollTop = 0;
+    },
+  };
+
+  collectorChooser.group
+    .querySelector('.choose-btn')!
+    .addEventListener('click', () => startChoosing(collectorChooser));
+  q('#collector-cancel').addEventListener('click', () => endChoosing(false));
 
   // The location chooser: a map, loaded the first time it's needed.
   let locationPicker: Promise<LocationChooser> | null = null;
