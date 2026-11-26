@@ -44,6 +44,19 @@ const CLOSE_VELOCITY = 0.5;
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
+// Coordinates as one "lat, lng" field, the form map apps accept.
+const formatCoords = (latitude: number, longitude: number) =>
+  `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
+
+/** "lat, lng" (or "lat lng", degree signs allowed) → numbers, or null if invalid. */
+function parseCoords(text: string): { latitude: number; longitude: number } | null {
+  const parts = text.replace(/°/g, '').trim().split(/\s*,\s*|\s+/);
+  if (parts.length !== 2 || parts.some((p) => p === '')) return null;
+  const [latitude, longitude] = parts.map(Number);
+  if (!(Math.abs(latitude) <= 90) || !(Math.abs(longitude) <= 180)) return null;
+  return { latitude, longitude };
+}
+
 // One collapsible group of fields. The outer element's height animates; the
 // card inside it keeps its padding, so its height can be measured.
 const group = (name: string, title: string | null, content: string, chooser = false) => `
@@ -96,19 +109,19 @@ const MARKUP = `
       ${group(
         'where',
         'Location',
-        `<div class="field-row">
-          <label>Latitude<input id="ed-lat" type="text" autocorrect="off" spellcheck="false" /></label>
-          <label>Longitude<input id="ed-lng" type="text" autocorrect="off" spellcheck="false" /></label>
+        `<div class="field-row copy-row">
+          <label>Latitude, longitude<input id="ed-coords" type="text" autocorrect="off"
+            spellcheck="false" placeholder="lat, lng" /></label>
+          <button id="ed-copy" type="button" class="secondary-btn copy-btn"
+            aria-label="Copy latitude and longitude">Copy</button>
         </div>
         <label>Region<input id="ed-region" type="text" autocapitalize="words"
           autocorrect="off" spellcheck="false" /></label>
-        <div class="field-row copy-row">
+        <div class="field-row">
           <label>Accuracy (m)<input id="ed-acc" type="text" inputmode="decimal"
             placeholder="Unknown" /></label>
           <label>Altitude (m)<input id="ed-alt" type="text" autocorrect="off"
             spellcheck="false" placeholder="Unknown" /></label>
-          <button id="ed-copy" type="button" class="secondary-btn copy-btn"
-            aria-label="Copy latitude and longitude">Copy</button>
         </div>`,
         true,
       )}
@@ -244,8 +257,7 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
   const taxonIn = input('taxon');
   const dateIn = input('date');
   const timeIn = input('time');
-  const latIn = input('lat');
-  const lngIn = input('lng');
+  const coordsIn = input('coords');
   const accIn = input('acc');
   const altIn = input('alt');
   const regionIn = input('region');
@@ -291,17 +303,17 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
   // The region looked up for the last pin placed in the location chooser,
   // with the coordinates (as text) it was looked up for. Each pin's lookups
   // (region and altitude) are a run; an older one's answers are dropped.
-  let pinPlace: { latitude: string; longitude: string; place: Place } | null = null;
+  let pinPlace: { coords: string; place: Place } | null = null;
   let placeRun = 0;
 
-  // Copy the coordinates as "lat, lng", which map apps accept as a search.
+  // Copy the coordinates as typed, which map apps accept as a search.
   function updateCopy() {
-    copyBtn.disabled = !latIn.value.trim() || !lngIn.value.trim();
+    copyBtn.disabled = !coordsIn.value.trim();
   }
 
   copyBtn.addEventListener('click', async () => {
     try {
-      await Clipboard.write({ string: `${latIn.value.trim()}, ${lngIn.value.trim()}` });
+      await Clipboard.write({ string: coordsIn.value.trim() });
       copyBtn.textContent = 'Copied';
       setTimeout(() => (copyBtn.textContent = 'Copy'), 1500);
     } catch (err) {
@@ -312,11 +324,8 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
 
   // The coordinates as typed, or the saved ones if they aren't numbers.
   function typedCoords(): [number, number] {
-    const lat = Number(latIn.value);
-    const lng = Number(lngIn.value);
-    return latIn.value.trim() && lngIn.value.trim() && Number.isFinite(lat) && Number.isFinite(lng)
-      ? [lat, lng]
-      : [original!.latitude, original!.longitude];
+    const c = parseCoords(coordsIn.value) ?? original!;
+    return [c.latitude, c.longitude];
   }
 
   // The zone the date and time are in, from the coordinates as typed.
@@ -334,8 +343,7 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
     taxonIn.value = r.taxon ?? '';
     dateIn.value = date;
     timeIn.value = time;
-    latIn.value = r.latitude.toFixed(5);
-    lngIn.value = r.longitude.toFixed(5);
+    coordsIn.value = formatCoords(r.latitude, r.longitude);
     accIn.value = r.accuracy != null ? r.accuracy.toFixed(0) : '';
     altIn.value = r.altitude != null ? r.altitude.toFixed(0) : '';
     regionIn.value = r.region ?? '';
@@ -449,14 +457,14 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
       return s === '' ? null : Number(s);
     };
 
-    const latitude = number(latIn, r.latitude);
-    if (latitude == null || !(Math.abs(latitude) <= 90)) {
-      return fail(latIn, 'Latitude must be a number from -90 to 90.');
+    const coords = changed(coordsIn) ? parseCoords(coordsIn.value) : r;
+    if (!coords) {
+      return fail(
+        coordsIn,
+        'Enter latitude (-90 to 90), a comma, then longitude (-180 to 180).',
+      );
     }
-    const longitude = number(lngIn, r.longitude);
-    if (longitude == null || !(Math.abs(longitude) <= 180)) {
-      return fail(lngIn, 'Longitude must be a number from -180 to 180.');
-    }
+    const { latitude, longitude } = coords;
     const accuracy = number(accIn, r.accuracy);
     if (accuracy != null && !(accuracy >= 0)) {
       return fail(accIn, 'Accuracy must be a number of metres, or blank.');
@@ -493,9 +501,7 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
     let { region, place } = r;
     const kept = pinPlace;
     const pinned =
-      kept && kept.latitude === latIn.value && kept.longitude === lngIn.value
-        ? kept.place
-        : null;
+      kept && kept.coords === coordsIn.value ? kept.place : null;
     if (moved && pinned && text(regionIn) === pinned.region) {
       // Looked up for the pin placed in the location chooser.
       region = pinned.region;
@@ -707,26 +713,19 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
   const mapWrap = q<HTMLElement>('#where-map');
 
   // The coordinates as typed, or null if they aren't valid.
-  function typedPin(): LatLng | null {
-    const latitude = Number(latIn.value.trim().replace(',', '.'));
-    const longitude = Number(lngIn.value.trim().replace(',', '.'));
-    if (!latIn.value.trim() || !lngIn.value.trim()) return null;
-    if (!(Math.abs(latitude) <= 90) || !(Math.abs(longitude) <= 180)) return null;
-    return { latitude, longitude };
-  }
+  const typedPin = (): LatLng | null => parseCoords(coordsIn.value);
 
   // Look up the region and altitude for a pin; they show in their fields.
   function lookUpPin(pin: LatLng) {
     const thisRun = ++placeRun;
-    const latitude = latIn.value;
-    const longitude = lngIn.value;
+    const coords = coordsIn.value;
     regionIn.value = '';
     regionIn.placeholder = 'Looking up…';
     host.placeAt(pin.latitude, pin.longitude).then(
       (place) => {
         if (thisRun !== placeRun) return;
         regionIn.placeholder = '';
-        pinPlace = { latitude, longitude, place };
+        pinPlace = { coords, place };
         // Unless the user has typed a region since the chooser closed.
         if (active === whereChooser || regionIn.value === '') regionIn.value = place.region ?? '';
         updateSave();
@@ -753,8 +752,7 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
 
   const locationHost: LocationChooserHost = {
     change(pin, accuracy, moved) {
-      latIn.value = pin.latitude.toFixed(5);
-      lngIn.value = pin.longitude.toFixed(5);
+      coordsIn.value = formatCoords(pin.latitude, pin.longitude);
       accIn.value = String(accuracy);
       if (moved) lookUpPin(pin);
       updateZone();
@@ -766,7 +764,7 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
   const whereChooser: Chooser = {
     group: whereGroup,
     panel: q('#where-chooser'),
-    fields: [latIn, lngIn, accIn, altIn, regionIn],
+    fields: [coordsIn, accIn, altIn, regionIn],
     begin() {
       const r = original!;
       const accuracy = Number(accIn.value.trim().replace(',', '.'));

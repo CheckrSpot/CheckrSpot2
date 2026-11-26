@@ -589,9 +589,9 @@ label + .field-row,
   margin-top: 0;
 }
 
-/* Accuracy | Altitude | Copy, at the bottom of the Location group. */
+/* Latitude, longitude | Copy, at the top of the Location group. */
 .copy-row {
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: 1fr auto;
 }
 
 .copy-btn {

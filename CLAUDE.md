@@ -247,10 +247,12 @@ from a `Position` (capture) or a photo (import).
 - **Editor** (`editor.ts`): full-screen `<dialog class="screen">` sliding in
   from the right; Cancel / code title / Save (disabled until a field
   changes). Field groups, in order: ID, Taxon (with Choose), Date and time
-  (with zone name and Choose), Location (with Choose: latitude | longitude,
-  Region, then Accuracy | Altitude | Copy), Locality (two lines),
+  (with zone name and Choose), Location (with Choose: "Latitude, longitude"
+  as one field | Copy, Region, then Accuracy | Altitude), Locality (two lines),
   Collector (with Choose). Region and Altitude sit in Location because they're derived
-  from the coordinates. Copy puts "lat, lng" as typed on the clipboard (the form
+  from the coordinates. The coordinates field shows "lat, lng" (5 dp) and accepts a comma
+  and/or spaces between them, degree signs allowed (`parseCoords`). Copy puts
+  it as typed on the clipboard (the form
   Google Maps accepts) and briefly reads "Copied". Every field is text; return moves to the
   next. Closing with changes (Cancel, left-edge swipe, Escape / Android back
   via the dialog's `cancel` event) asks "Discard changes?".

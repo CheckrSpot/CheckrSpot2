@@ -69,7 +69,7 @@ database.
   the list, are skipped and listed afterwards.
 - The list shows each reading's ID and taxon, newest first. Tap one to open
   the **editor**, which slides in from the right. Every field can be edited as
-  text: ID, taxon, date and time, latitude, longitude, region, accuracy,
+  text: ID, taxon, date and time, latitude and longitude (one field, `lat, lng`), region, accuracy,
   altitude, both locality lines and collector. **Copy** in the Location
   group puts the coordinates on the clipboard as `lat, lng`, ready to paste
   into Google Maps. **Save** (enabled once something
