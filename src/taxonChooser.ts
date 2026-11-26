@@ -76,7 +76,7 @@ const stepper = (id: string, label: string, inputmode: string, unit: string) => 
 /** The chooser's panel, for the editor's markup. */
 export const TAXON_CHOOSER_MARKUP = `
   <section id="taxon-chooser" class="chooser tall" aria-label="Choose taxon">
-    <header class="chooser-bar taxon-bar">
+    <header class="chooser-bar titled-bar">
       <button id="taxon-cancel" type="button" class="text-btn">Cancel</button>
       <span id="taxon-summary" class="chooser-title"></span>
       <button id="taxon-gear" type="button" class="icon-btn gear-btn" aria-label="Settings"

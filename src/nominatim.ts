@@ -1,8 +1,9 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
-import type { Place, ReverseGeocoder } from './geocoder';
+import type { AreaFinder, Bounds, Place, ReverseGeocoder } from './geocoder';
 
 const SOURCE = 'nominatim';
 const ENDPOINT = 'https://nominatim.openstreetmap.org/reverse';
+const SEARCH_ENDPOINT = 'https://nominatim.openstreetmap.org/search';
 // Nominatim's usage policy requires an identifying User-Agent and at most one
 // request per second across all users of the app.
 const USER_AGENT = 'CheckrSpot/2.0';
@@ -18,6 +19,21 @@ interface NominatimResponse {
   error?: string;
   display_name?: string;
   address?: Record<string, string>;
+  /** South, north, west, east, as strings. */
+  boundingbox?: string[];
+}
+
+function toBounds(box: string[] | undefined): Bounds | null {
+  const b = box?.map(Number);
+  return b && b.length === 4 && b.every(Number.isFinite) ? [b[0], b[1], b[2], b[3]] : null;
+}
+
+// Undo formatRegion for a search: "US-AZ, Pima Co." → "Pima County, US-AZ".
+// Other text, such as a region the user typed, is searched as it is.
+function regionQuery(region: string): string {
+  const parts = region.split(',').map((p) => p.trim()).filter(Boolean);
+  if (parts.length > 1 && /^[A-Z]{2}(-[A-Z0-9]{1,3})?$/.test(parts[0])) parts.push(parts.shift()!);
+  return parts.map((p) => p.replace(/\bCo\.$/, 'County')).join(', ');
 }
 
 // As in the old app: the ISO region code, then the first part of the display
@@ -29,8 +45,8 @@ function formatRegion(data: NominatimResponse): string | null {
   return [iso, first].filter(Boolean).join(', ') || null;
 }
 
-/** Reverse geocoding with OpenStreetMap's Nominatim service. */
-export class NominatimGeocoder implements ReverseGeocoder {
+/** Reverse geocoding, and finding a region's area, with OpenStreetMap's Nominatim service. */
+export class NominatimGeocoder implements ReverseGeocoder, AreaFinder {
   // Keyed by coordinates rounded to ~100 m, which is within GPS error. Holds
   // requests in progress too, so a repeat shares the first one's answer.
   private cache = new Map<string, Promise<Place>>();
@@ -54,7 +70,24 @@ export class NominatimGeocoder implements ReverseGeocoder {
     return place;
   }
 
-  private enqueue(task: () => Promise<Place>): Promise<Place> {
+  areaOf(place: Pick<Place, 'source' | 'details'>): Bounds | null {
+    if (place.source !== SOURCE) return null;
+    return toBounds((place.details as NominatimResponse | null)?.boundingbox);
+  }
+
+  findArea(region: string): Promise<Bounds | null> {
+    return this.enqueue(async () => {
+      const results = await this.get(SEARCH_ENDPOINT, {
+        format: 'jsonv2',
+        q: regionQuery(region),
+        limit: '1',
+        'accept-language': 'en',
+      });
+      return toBounds((results as NominatimResponse[])[0]?.boundingbox);
+    });
+  }
+
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
     const generation = this.generation;
     const run = this.tail.then(async () => {
       if (generation !== this.generation) throw new NetworkError('No network connection');
@@ -73,17 +106,23 @@ export class NominatimGeocoder implements ReverseGeocoder {
   }
 
   private async request(latitude: number, longitude: number): Promise<Place> {
+    const data = (await this.get(ENDPOINT, {
+      format: 'jsonv2',
+      lat: String(latitude),
+      lon: String(longitude),
+      zoom: '9',
+      'accept-language': 'en',
+    })) as NominatimResponse;
+    // An `error` (e.g. "Unable to geocode" for open ocean) is an answer, not a failure.
+    return { region: data.error ? null : formatRegion(data), source: SOURCE, details: data };
+  }
+
+  private async get(url: string, params: Record<string, string>): Promise<unknown> {
     let res;
     try {
       res = await CapacitorHttp.get({
-        url: ENDPOINT,
-        params: {
-          format: 'jsonv2',
-          lat: String(latitude),
-          lon: String(longitude),
-          zoom: '9',
-          'accept-language': 'en',
-        },
+        url,
+        params,
         // Browsers don't let pages set User-Agent (and trying could trigger a
         // CORS preflight), so only send it natively.
         headers: Capacitor.isNativePlatform() ? { 'User-Agent': USER_AGENT } : {},
@@ -95,8 +134,6 @@ export class NominatimGeocoder implements ReverseGeocoder {
       throw new NetworkError(err instanceof Error ? err.message : String(err));
     }
     if (res.status !== 200) throw new Error(`Nominatim returned HTTP ${res.status}`);
-    const data: NominatimResponse = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
-    // An `error` (e.g. "Unable to geocode" for open ocean) is an answer, not a failure.
-    return { region: data.error ? null : formatRegion(data), source: SOURCE, details: data };
+    return typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
   }
 }

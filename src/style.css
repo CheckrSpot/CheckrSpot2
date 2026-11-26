@@ -15,6 +15,11 @@
   --fix-poor-press: #b45309;
   --fix-good: #16a34a;
   --fix-good-press: #15803d;
+  /* The editor's fields, per chooser group: pastel hues that stay apart
+     with red-green colour blindness (blue, yellow, rose). */
+  --field-where: #d6e6fd;
+  --field-when: #faecb8;
+  --field-taxon: #f7d6e6;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -32,6 +37,9 @@
     --fix-poor-press: #b45309;
     --fix-good: #16a34a;
     --fix-good-press: #15803d;
+    --field-where: #1b2a47;
+    --field-when: #353018;
+    --field-taxon: #3b2131;
   }
 }
 * {
@@ -569,19 +577,86 @@ button:hover:not(:disabled) {
 }
 
 .editor-body label + label,
-.field-row + label {
+.field-row + label,
+label + .field-row,
+.field-row + .field-row {
   margin-top: 0.75rem;
+}
+
+/* Side by side in a row: no spacing above, which would make the row taller
+   and stretch the other fields in it. */
+.editor-body .field-row > label {
+  margin-top: 0;
+}
+
+/* Accuracy | Altitude | Copy, at the bottom of the Location group. */
+.copy-row {
+  grid-template-columns: 1fr 1fr auto;
+}
+
+.copy-btn {
+  align-self: end;
+  justify-self: end;
+  width: auto;
+  padding: 0.6rem 1.2rem;
+}
+
+/* Not while a chooser is open (kept in the layout, so the group's height,
+   which places the chooser, doesn't change). */
+.choosing .copy-btn {
+  visibility: hidden;
 }
 
 .editor-body input {
   width: 100%;
   min-width: 0;
+  background: var(--field-bg, var(--bg));
+}
+
+/* Each chooser group's fields share a hue, to tell the groups apart. */
+[data-group="where"] {
+  --field-bg: var(--field-where);
+}
+
+[data-group="when"] {
+  --field-bg: var(--field-when);
+}
+
+[data-group="taxon"] {
+  --field-bg: var(--field-taxon);
 }
 
 /* While choosing, the fields show the chooser's values and can't be edited. */
 .choosing input {
   background: transparent;
   border-color: transparent;
+}
+
+/* ... and are packed tighter (to about 37%), leaving more room for the chooser. */
+.choosing .group-card {
+  padding-top: 0.28rem;
+  padding-bottom: 0.28rem;
+}
+
+.choosing .group-head {
+  margin-bottom: 0.19rem;
+}
+
+.choosing label {
+  gap: 0.11rem;
+}
+
+.choosing label + label,
+.choosing .field-row + label,
+.choosing label + .field-row,
+.choosing .field-row + .field-row {
+  margin-top: 0.28rem;
+}
+
+.choosing input,
+.choosing .copy-btn {
+  padding-top: 0.225rem;
+  padding-bottom: 0.225rem;
 }
 
 /* A chooser slides up from the bottom, below its group (--chooser-top is
@@ -747,7 +822,7 @@ calendar-month::part(selected) {
   height: calc(100% - var(--chooser-top, 0px));
 }
 
-.taxon-bar {
+.titled-bar {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
@@ -961,6 +1036,59 @@ calendar-month::part(selected) {
 
 .taxon-name.italic {
   font-style: italic;
+}
+
+/* Location chooser: the map fills the panel. */
+.map-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Two classes, to beat MapLibre's .maplibregl-map { position: relative },
+   which loads later and would leave the map with no height. */
+.map-wrap .location-map {
+  position: absolute;
+  inset: 0;
+}
+
+/* Undo the app's global button style inside the map, so MapLibre's own
+   control styles apply (:where keeps this as weak as the global rule). */
+:where(.map-wrap) button {
+  width: auto;
+  padding: 0;
+  color: inherit;
+  font-weight: normal;
+  border-radius: 0;
+}
+
+/* Always half the map's width, centred on the pin (positioned from JS). */
+.accuracy-circle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 50%;
+  aspect-ratio: 1;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.map-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+/* The compass (turn back to north) shows only while the map is rotated. */
+.map-wrap:not(.rotated) .maplibregl-ctrl-top-right .maplibregl-ctrl-group {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

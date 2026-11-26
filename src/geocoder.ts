@@ -22,3 +22,14 @@ export interface ReverseGeocoder {
    */
   lookup(latitude: number, longitude: number): Promise<Place>;
 }
+
+/** A latitude/longitude box: south, north, west, east. */
+export type Bounds = [number, number, number, number];
+
+/** Finding the area a region covers, to show it on a map. */
+export interface AreaFinder {
+  /** The area of a place from `lookup`, if the service's details include it. */
+  areaOf(place: Pick<Place, 'source' | 'details'>): Bounds | null;
+  /** Search for a region by its text (as `lookup` formats it); null if not found. */
+  findArea(region: string): Promise<Bounds | null>;
+}

@@ -1,6 +1,10 @@
 import 'cally';
+import { Clipboard } from '@capacitor/clipboard';
 import { Network, type ConnectionStatus } from '@capacitor/network';
 import { MAX_CODE_LENGTH, type Reading } from './db';
+import type { Bounds, Place } from './geocoder';
+import type { LatLng, LocationChooser, LocationChooserHost } from './locationChooser';
+import { elevationAt } from './elevation';
 import { afterSlide, reducedMotion } from './motion';
 import { createTaxonChooser, TAXON_CHOOSER_MARKUP } from './taxonChooser';
 import { fromWallTime, parseWallTime, wallTime, zoneAt, zoneName } from './time';
@@ -11,13 +15,21 @@ import { fromWallTime, parseWallTime, wallTime, zoneAt, zoneName } from './time'
 // leaving that group at the top, and slides the chooser up from the bottom;
 // the group's fields then follow the chooser, read-only, until it is done
 // (keep) or cancelled (restore). The date and time chooser is here; the
-// taxon chooser is in taxonChooser.ts. Swipe in from the left edge, or
-// Cancel, to close the editor.
+// taxon and location choosers are in taxonChooser.ts and locationChooser.ts.
+// Swipe in from the left edge, or Cancel, to close the editor.
 
 /** What the editor needs from the app. */
 export interface EditorHost {
   /** Look up the reading's region and save it; resolves with the updated reading. */
   lookUpPlace(r: Reading): Promise<Reading>;
+  /** The place at a spot, from the same service, without saving it. */
+  placeAt(latitude: number, longitude: number): Promise<Place>;
+  /** A region's area for the map: from its place's details, else by searching its text. */
+  regionArea(region: string, place: Reading['place']): Promise<Bounds | null>;
+  /** All readings, shown as dots on the map. */
+  readings(): Reading[];
+  /** Follow the device's position, shown on the map. */
+  watchPosition: LocationChooserHost['watchPosition'];
   /** Save the edited reading (and refresh the list). */
   save(r: Reading): Promise<void>;
 }
@@ -72,10 +84,10 @@ const MARKUP = `
         'when',
         'Date and time <span id="ed-zone" class="zone"></span>',
         `<div class="field-row">
-          <label>Date<input id="ed-date" type="text" placeholder="yyyy-mm-dd"
-            autocorrect="off" spellcheck="false" /></label>
-          <label>Time<input id="ed-time" type="text" placeholder="hh:mm"
-            autocorrect="off" spellcheck="false" /></label>
+          <input id="ed-date" type="text" placeholder="yyyy-mm-dd" aria-label="Date"
+            autocorrect="off" spellcheck="false" />
+          <input id="ed-time" type="text" placeholder="hh:mm" aria-label="Time"
+            autocorrect="off" spellcheck="false" />
         </div>`,
         true,
       )}
@@ -86,20 +98,17 @@ const MARKUP = `
           <label>Latitude<input id="ed-lat" type="text" autocorrect="off" spellcheck="false" /></label>
           <label>Longitude<input id="ed-lng" type="text" autocorrect="off" spellcheck="false" /></label>
         </div>
-        <label>Accuracy (m)<input id="ed-acc" type="text" inputmode="decimal"
-          placeholder="Unknown" /></label>`,
-      )}
-      ${group(
-        'altitude',
-        null,
-        `<label>Altitude (m)<input id="ed-alt" type="text" autocorrect="off"
-          spellcheck="false" placeholder="Unknown" /></label>`,
-      )}
-      ${group(
-        'region',
-        null,
-        `<label>Region<input id="ed-region" type="text" autocapitalize="words"
-          autocorrect="off" spellcheck="false" /></label>`,
+        <label>Region<input id="ed-region" type="text" autocapitalize="words"
+          autocorrect="off" spellcheck="false" /></label>
+        <div class="field-row copy-row">
+          <label>Accuracy (m)<input id="ed-acc" type="text" inputmode="decimal"
+            placeholder="Unknown" /></label>
+          <label>Altitude (m)<input id="ed-alt" type="text" autocorrect="off"
+            spellcheck="false" placeholder="Unknown" /></label>
+          <button id="ed-copy" type="button" class="secondary-btn copy-btn"
+            aria-label="Copy latitude and longitude">Copy</button>
+        </div>`,
+        true,
       )}
       ${group(
         'locality',
@@ -140,6 +149,18 @@ const MARKUP = `
       </div>
     </section>
     ${TAXON_CHOOSER_MARKUP}
+    <section id="where-chooser" class="chooser tall" aria-label="Choose location">
+      <header class="chooser-bar titled-bar">
+        <button id="where-cancel" type="button" class="text-btn">Cancel</button>
+        <span class="chooser-title">Tap to place the pin</span>
+        <button id="where-done" type="button" class="text-btn">Done</button>
+      </header>
+      <div id="where-map" class="map-wrap">
+        <div class="location-map"></div>
+        <div class="accuracy-circle" hidden></div>
+        <p class="map-status">Loading map…</p>
+      </div>
+    </section>
   </dialog>
   <dialog id="confirm-discard" class="inspector" aria-labelledby="discard-title">
     <h2 id="discard-title">Discard changes?</h2>
@@ -219,6 +240,8 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
   const groups = [...form.querySelectorAll<HTMLElement>('.field-group')];
   const whenGroup = q<HTMLElement>('[data-group="when"]');
   const taxonGroup = q<HTMLElement>('[data-group="taxon"]');
+  const whereGroup = q<HTMLElement>('[data-group="where"]');
+  const copyBtn = q<HTMLButtonElement>('#ed-copy');
   const calendar = q<HTMLElement & { value: string; focusedDate?: string }>('#ed-calendar');
 
   // The reading being edited, as saved (its region is filled in if a lookup
@@ -237,6 +260,8 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
     fields: HTMLInputElement[];
     /** Set the chooser up from the fields; called once its panel is open. */
     begin(): void;
+    /** Called as it closes, done or cancelled. */
+    end?(): void;
   }
 
   // The open chooser, and its fields' values from before it opened.
@@ -246,6 +271,28 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
   function updateSave() {
     saveBtn.disabled = active !== null || !dirty();
   }
+
+  // The region looked up for the last pin placed in the location chooser,
+  // with the coordinates (as text) it was looked up for. Each pin's lookups
+  // (region and altitude) are a run; an older one's answers are dropped.
+  let pinPlace: { latitude: string; longitude: string; place: Place } | null = null;
+  let placeRun = 0;
+
+  // Copy the coordinates as "lat, lng", which map apps accept as a search.
+  function updateCopy() {
+    copyBtn.disabled = !latIn.value.trim() || !lngIn.value.trim();
+  }
+
+  copyBtn.addEventListener('click', async () => {
+    try {
+      await Clipboard.write({ string: `${latIn.value.trim()}, ${lngIn.value.trim()}` });
+      copyBtn.textContent = 'Copied';
+      setTimeout(() => (copyBtn.textContent = 'Copy'), 1500);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(`Not copied: ${msg}`);
+    }
+  });
 
   // The coordinates as typed, or the saved ones if they aren't numbers.
   function typedCoords(): [number, number] {
@@ -281,7 +328,10 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
     collectorIn.value = r.collector ?? '';
     for (const el of inputs) initial.set(el, el.value);
     q('#editor-title').textContent = r.code || 'Reading';
+    pinPlace = null;
+    placeRun++;
     regionIn.placeholder = '';
+    altIn.placeholder = 'Unknown';
     if (!r.place) {
       regionIn.placeholder = 'Looking up…';
       host.lookUpPlace(r).then(
@@ -303,6 +353,7 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
     }
     updateZone();
     updateSave();
+    updateCopy();
     form.scrollTop = 0;
     editorEl.showModal();
     // Start from off-screen, so adding .shown slides the editor in.
@@ -354,6 +405,7 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
   form.addEventListener('input', () => {
     updateSave();
     updateZone();
+    updateCopy();
   });
 
   // Return moves to the next field; on the last one it dismisses the keyboard.
@@ -418,11 +470,21 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
       recordedAt = t;
     }
 
-    // A typed region is kept as a manual place, which lookups leave alone;
+    // The region looked up for a pin is saved like any looked-up region. A
+    // typed region is kept as a manual place, which lookups leave alone;
     // clearing it means "look it up again". Moving the reading drops a
     // looked-up region, which no longer applies.
     let { region, place } = r;
-    if (changed(regionIn)) {
+    const kept = pinPlace;
+    const pinned =
+      kept && kept.latitude === latIn.value && kept.longitude === lngIn.value
+        ? kept.place
+        : null;
+    if (moved && pinned && text(regionIn) === pinned.region) {
+      // Looked up for the pin placed in the location chooser.
+      region = pinned.region;
+      place = { source: pinned.source, details: pinned.details };
+    } else if (changed(regionIn)) {
       region = text(regionIn);
       place = region ? { source: 'manual', details: null } : null;
     } else if (moved && place?.source !== 'manual') {
@@ -504,7 +566,13 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
   function endChoosing(keep: boolean) {
     const c = active;
     if (!c) return;
-    if (!keep) c.fields.forEach((el, i) => (el.value = beforeChoosing[i]));
+    c.end?.();
+    if (!keep) {
+      c.fields.forEach((el, i) => (el.value = beforeChoosing[i]));
+      placeRun++;
+      regionIn.placeholder = '';
+      altIn.placeholder = 'Unknown';
+    }
     active = null;
     c.panel.classList.remove('open');
     form.classList.remove('choosing');
@@ -513,6 +581,7 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
     cancelBtn.disabled = false;
     updateZone();
     updateSave();
+    updateCopy();
   }
 
   // The date and time chooser: Cally's calendar and two wheels.
@@ -577,11 +646,119 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
     },
   };
 
-  // Greyed out without a network connection, since it needs iNaturalist.
+  // The location chooser: a map, loaded the first time it's needed.
+  let locationPicker: Promise<LocationChooser> | null = null;
+  const mapWrap = q<HTMLElement>('#where-map');
+
+  // The coordinates as typed, or null if they aren't valid.
+  function typedPin(): LatLng | null {
+    const latitude = Number(latIn.value.trim().replace(',', '.'));
+    const longitude = Number(lngIn.value.trim().replace(',', '.'));
+    if (!latIn.value.trim() || !lngIn.value.trim()) return null;
+    if (!(Math.abs(latitude) <= 90) || !(Math.abs(longitude) <= 180)) return null;
+    return { latitude, longitude };
+  }
+
+  // Look up the region and altitude for a pin; they show in their fields.
+  function lookUpPin(pin: LatLng) {
+    const thisRun = ++placeRun;
+    const latitude = latIn.value;
+    const longitude = lngIn.value;
+    regionIn.value = '';
+    regionIn.placeholder = 'Looking up…';
+    host.placeAt(pin.latitude, pin.longitude).then(
+      (place) => {
+        if (thisRun !== placeRun) return;
+        regionIn.placeholder = '';
+        pinPlace = { latitude, longitude, place };
+        // Unless the user has typed a region since the chooser closed.
+        if (active === whereChooser || regionIn.value === '') regionIn.value = place.region ?? '';
+        updateSave();
+      },
+      () => {
+        if (thisRun === placeRun) regionIn.placeholder = '';
+      },
+    );
+    altIn.value = '';
+    altIn.placeholder = 'Looking up…';
+    elevationAt(pin.latitude, pin.longitude).then(
+      (metres) => {
+        if (thisRun !== placeRun) return;
+        altIn.placeholder = 'Unknown';
+        // Unless the user has typed an altitude since the chooser closed.
+        if (active === whereChooser || altIn.value === '') altIn.value = metres.toFixed(0);
+        updateSave();
+      },
+      () => {
+        if (thisRun === placeRun) altIn.placeholder = 'Unknown';
+      },
+    );
+  }
+
+  const locationHost: LocationChooserHost = {
+    change(pin, accuracy, moved) {
+      latIn.value = pin.latitude.toFixed(5);
+      lngIn.value = pin.longitude.toFixed(5);
+      accIn.value = String(accuracy);
+      if (moved) lookUpPin(pin);
+      updateZone();
+      updateCopy();
+    },
+    watchPosition: (listener) => host.watchPosition(listener),
+  };
+
+  const whereChooser: Chooser = {
+    group: whereGroup,
+    panel: q('#where-chooser'),
+    fields: [latIn, lngIn, accIn, altIn, regionIn],
+    begin() {
+      const r = original!;
+      const accuracy = Number(accIn.value.trim().replace(',', '.'));
+      const regionText = regionIn.value.trim();
+      const start = {
+        pin: typedPin(),
+        accuracy: accIn.value.trim() && accuracy > 0 ? accuracy : null,
+        area: () =>
+          regionText
+            ? host.regionArea(regionText, changed(regionIn) ? null : r.place)
+            : Promise.resolve(null),
+        others: host
+          .readings()
+          .filter((x) => x.id !== r.id)
+          .map((x) => ({ latitude: x.latitude, longitude: x.longitude })),
+      };
+      if (!locationPicker) {
+        locationPicker = import('./locationChooser').then((m) =>
+          m.createLocationChooser(mapWrap, locationHost),
+        );
+        // Try again next time if it couldn't be loaded.
+        locationPicker.catch(() => {
+          locationPicker = null;
+          const status = mapWrap.querySelector<HTMLElement>('.map-status')!;
+          status.textContent = "Couldn't load the map.";
+          status.hidden = false;
+        });
+      }
+      locationPicker.then((picker) => {
+        if (active === whereChooser) picker.begin(start);
+      }, () => {});
+    },
+    end() {
+      locationPicker?.then((picker) => picker.end(), () => {});
+    },
+  };
+
+  q('#where-cancel').addEventListener('click', () => endChoosing(false));
+  q('#where-done').addEventListener('click', () => endChoosing(true));
+
+  // Both choosers that need the network are greyed out without it.
   const taxonChooseBtn = taxonGroup.querySelector<HTMLButtonElement>('.choose-btn')!;
+  const whereChooseBtn = whereGroup.querySelector<HTMLButtonElement>('.choose-btn')!;
   taxonChooseBtn.addEventListener('click', () => startChoosing(taxonChooser));
+  whereChooseBtn.addEventListener('click', () => startChoosing(whereChooser));
   const showConnection = ({ connected }: ConnectionStatus) => {
     taxonChooseBtn.disabled = !connected;
+    whereChooseBtn.disabled = !connected;
   };
   Network.getStatus().then(showConnection, () => {});
   Network.addListener('networkStatusChange', showConnection);

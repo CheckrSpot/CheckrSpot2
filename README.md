@@ -36,12 +36,17 @@ database.
   [`@photostructure/tz-lookup`](https://github.com/photostructure/tz-lookup)
   for the time zone at a reading's coordinates (offline);
   [Cally](https://wicky.nillia.ms/cally/) for the calendar in the editor
+- **Maps:** [MapLibre GL JS](https://maplibre.org/) with
+  [OpenFreeMap](https://openfreemap.org/) tiles (OpenStreetMap data, no key)
+  for the location chooser
 - **Taxa:** the [iNaturalist API](https://api.inaturalist.org/v1/docs/) for the
   taxon chooser, and [`@capacitor/network`](https://capacitorjs.com/docs/apis/network)
   to disable it when offline
 - **Reverse geocoding:** OpenStreetMap's [Nominatim](https://nominatim.org/),
   called with `CapacitorHttp` (part of `@capacitor/core`) — see
   [Region lookup](#region-lookup)
+- **Elevation:** [Open-Meteo's elevation API](https://open-meteo.com/en/docs/elevation-api)
+  (no key), for the altitude of a pin placed in the location chooser
 
 ## Using the app
 
@@ -63,13 +68,23 @@ database.
   the list, are skipped and listed afterwards.
 - The list shows each reading's ID and taxon, newest first. Tap one to open
   the **editor**, which slides in from the right. Every field can be edited as
-  text: ID, taxon, date and time, latitude, longitude, accuracy, altitude,
-  region, both locality lines and collector. **Save** (enabled once something
+  text: ID, taxon, date and time, latitude, longitude, region, accuracy,
+  altitude, both locality lines and collector. **Copy** in the Location
+  group puts the coordinates on the clipboard as `lat, lng`, ready to paste
+  into Google Maps. **Save** (enabled once something
   has changed) or **Cancel**; swiping in from the left edge (or Android's back
   gesture) also closes it, asking first if there are unsaved changes.
 - In the editor, **Choose** next to *Date and time* collapses the other fields
   and slides up a calendar and hour/minute wheels. The date and time fields
   follow them; **Done** keeps the choice, **Cancel** puts the fields back.
+- **Choose** next to *Location* opens a map with a pin for the reading, dots
+  for all the other readings and a blue dot for where you are. Pan with one
+  finger; pan, zoom and rotate with two. Tap to move the pin there (the map
+  centres on it, and the region and altitude are looked up again). The circle around the
+  pin is always half the map's width, so the zoom sets the accuracy: the
+  circle's radius on the ground, shown in the Accuracy field. A reading
+  without coordinates gets no pin until you tap; the map starts at its
+  region, or else at where you are. Greyed out without a network connection.
 - **Choose** next to *Taxon* shows the taxa observed on iNaturalist near the
   reading at that time of year (any year), most observed first: a grid of
   photos with the scientific name and the number of observations. Tap one
@@ -109,7 +124,7 @@ database.
 Each reading gets a short **region** such as `US-AZ, Pima Co.` (the ISO region
 code, then the county or nearest equivalent) from Nominatim. The app is often
 used without a network, so nothing is looked up when a reading is captured.
-A lookup happens only when you open a reading in the editor (for that reading)
+A lookup happens only when you open a reading in the editor (for that reading), move its pin in the location chooser (for the new spot)
 or tap **Labels**, copy or download (for the selected readings that don't have one yet). Results
 are saved, so each reading is looked up once.
 
@@ -213,8 +228,10 @@ A failed save is reported in an alert rather than crashing the app.
 
 - `src/main.ts` — UI, location watching, scanning and the capture flow
 - `src/editor.ts` — the reading editor and its date and time chooser
+- `src/locationChooser.ts` — the location chooser's map
 - `src/taxonChooser.ts` — the taxon chooser and its settings
 - `src/inaturalist.ts` — the iNaturalist API client
+- `src/elevation.ts` — ground elevation from Open-Meteo
 - `src/motion.ts` — animation timing shared by the editor and choosers
 - `src/time.ts` — time zones and conversions (Temporal, tz-lookup)
 - `src/polyfills.ts` — small polyfills for the oldest supported web views

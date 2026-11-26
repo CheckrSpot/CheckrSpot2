@@ -16,7 +16,7 @@ app makes only one:
 | Old app lookup | Service | Here |
 |---|---|---|
 | Temperature | Open-Meteo `/v1/forecast` | **Dropped.** It's modelled data (archived forecasts for a 1–25 km grid cell), not a measurement, and it isn't the app's job. Add a manual field if users ask for it. |
-| Elevation | open-elevation | **Dropped.** GPS already gives altitude. |
+| Elevation | open-elevation | **Dropped** at capture: GPS already gives altitude. Later added only for a pin moved in the editor's location chooser, from Open-Meteo's elevation API (`src/elevation.ts`). |
 | Reverse geocoding | Nominatim | **Kept**, as `region`. |
 
 Other decisions:

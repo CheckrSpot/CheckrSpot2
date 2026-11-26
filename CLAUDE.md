@@ -32,9 +32,9 @@ dependencies change.
 ## Stack
 
 - Vanilla TypeScript + Vite 8, no framework. TypeScript 6.
-- `vite.config.ts` sets `build.target` to `es2020`/`chrome91`/`safari15`
+- `vite.config.ts` sets `build.target` to `es2020`/`chrome91`/`safari16`
   because the app runs in platform WebViews, which can be old (Android 12
-  emulator images ship Chrome ~91; iOS 15 is the deployment target). Without
+  emulator images ship Chrome ~91; iOS 16 is the deployment target). Without
   it the minifier drops CSS fallbacks such as `height: 100%` before `100dvh`.
   When using newer CSS, add a fallback and check it survives in `dist/`.
 - Capacitor 8. iOS dependencies via **Swift Package Manager** (no CocoaPods);
@@ -54,6 +54,10 @@ dependencies change.
   finished appearing. Android resizes the web view itself, so there the
   reveal runs on window `resize`. The plugin hides iOS's keyboard accessory
   bar by default; `main.ts` turns it back on.
+  Capacitor blocks page pinch-zoom on iOS by being the web view's scroll
+  delegate; the Keyboard plugin replaces that delegate when scrolling is
+  disabled, so `index.html`'s viewport meta also sets `maximum-scale=1,
+  user-scalable=no`. Without it, two-finger gestures zoom the whole page.
 - `@capacitor/network`: only to grey out the taxon chooser's Choose button
   when offline.
 - Web libraries: `cally` (calendar web components; falls back to `<style>`
@@ -62,8 +66,17 @@ dependencies change.
   chunk), `@photostructure/tz-lookup` (offline coordinates → IANA zone, about
   70 KB). Types for Temporal come from TS's `ESNext.Temporal` lib.
 - `src/polyfills.ts` (imported first) adds what dependencies need beyond the
-  oldest WebViews: `Array.prototype.at` (Cally; missing before iOS 15.4 and
-  Chrome 92). Check new dependencies for such APIs.
+  oldest WebViews: `Array.prototype.at` (Cally; missing before Chrome 92).
+  Check new dependencies for such APIs. MapLibre also uses `.at()` and
+  `Object.hasOwn` in its web worker, which this can't reach, so the map
+  fails on WebViews older than Chrome 92 (old emulator images only; real
+  devices update their WebView). The fix, if ever needed: load a polyfill
+  into the workers with `maplibregl.importScriptInWorkers`.
+- `maplibre-gl` **5.x** (BSD) for the location chooser, with OpenFreeMap's
+  `liberty` style (OSM vector tiles, no key). Loaded by dynamic import with
+  the chooser (its own ~275 KB gzipped chunk and CSS). 6.x is ESM-only with
+  a module worker; 5.x's UMD build works with Vite as is. No satellite
+  view, by the user's choice (it would need a keyed imagery service).
 
 ## Files
 
@@ -82,6 +95,12 @@ dependencies change.
   (`/observations/species_counts`, session cache by query), `searchTaxa`
   (`/taxa/autocomplete`), `isoWeek`, `weeksAround`. `CapacitorHttp` with
   User-Agent `CheckrSpot/2.0`, as for Nominatim.
+- `src/elevation.ts` — `elevationAt(lat, lng)`: Open-Meteo's elevation API
+  (Copernicus 90 m DEM, no key; free for non-commercial use, CC BY 4.0, so
+  credit it before release). Same `CapacitorHttp` and User-Agent.
+- `src/locationChooser.ts` — the location chooser's map
+  (`createLocationChooser(wrap, host)` → `begin(start)` / `end()`); its
+  panel markup is in `editor.ts`.
 - `src/motion.ts` — `SLIDE_MS` (matches the CSS transitions),
   `reducedMotion`, `afterSlide`, `expand` (height animation for a panel).
 - `src/time.ts` — `initTime` (polyfill), `zoneAt(lat, lng)` (IANA zone or
@@ -91,10 +110,14 @@ dependencies change.
 - `src/db.ts` — `Reading` type, `ReadingsStore` interface, schema, and two
   implementations: SQLite on native, in-memory stub on web (`npm run dev`).
 - `src/geocoder.ts` — `Place` and `ReverseGeocoder`, the service-neutral
-  interface for region lookups. The app depends only on this.
+  interface for region lookups, and `AreaFinder` (`areaOf(place)` from the
+  stored details, `findArea(regionText)` by search) returning `Bounds`
+  (south, north, west, east). The app depends only on these.
 - `src/nominatim.ts` — `NominatimGeocoder`: serial request queue (≥ 1.5 s
   apart), cache keyed by coordinates rounded to 0.001°, offline fail-fast,
-  region formatting. Uses `CapacitorHttp` so it can send a User-Agent.
+  region formatting; `findArea` searches (`/search`, through the same queue)
+  with the region text turned back into a query ("US-AZ, Pima Co." →
+  "Pima County, US-AZ"). Uses `CapacitorHttp` so it can send a User-Agent.
 - `dev-docs/reverse-geocoding.md` — design of the region lookup, including
   the decisions behind it (temperature and elevation lookups dropped).
 - `src/export.ts` — `toJSON` / `toCSV` / `exportFilename` for Copy and
@@ -217,8 +240,11 @@ from a `Position` (capture) or a photo (import).
 - **Editor** (`editor.ts`): full-screen `<dialog class="screen">` sliding in
   from the right; Cancel / code title / Save (disabled until a field
   changes). Field groups, in order: ID, Taxon (with Choose), Date and time
-  (with zone name and Choose), Location (latitude, longitude, accuracy), Altitude, Region,
-  Locality (two lines), Collector. Every field is text; return moves to the
+  (with zone name and Choose), Location (with Choose: latitude | longitude,
+  Region, then Accuracy | Altitude | Copy), Locality (two lines),
+  Collector. Region and Altitude sit in Location because they're derived
+  from the coordinates. Copy puts "lat, lng" as typed on the clipboard (the form
+  Google Maps accepts) and briefly reads "Copied". Every field is text; return moves to the
   next. Closing with changes (Cancel, left-edge swipe, Escape / Android back
   via the dialog's `cancel` event) asks "Discard changes?".
   - Saving: a field left as shown keeps the stored value (text has less
@@ -230,8 +256,8 @@ from a `Position` (capture) or a photo (import).
     `.field-group`, the card inside keeps its size), slides the chooser up
     from the bottom (capped below the group via `--chooser-top`), makes all
     inputs read-only and writes the chooser's values into the group's fields
-    live. Done keeps them; Cancel restores. Date/time and taxon so far; a
-    map chooser for location is planned.
+    live. Done keeps them; Cancel restores. Choosers that need the network
+    (taxon, location) have Choose disabled offline.
   - The user wants Cally for the calendar; the time is hour and minute
     wheels (24-hour).
   - **Taxon chooser**: iNat `species_counts` for the base taxon within the
@@ -252,9 +278,39 @@ from a `Position` (capture) or a photo (import).
     updates at once and the grid reloads 0.5 s after the last tap. Defaults: Butterflies
     (47224), 25 km, ±3 weeks. Choose is disabled offline (`@capacitor/network`);
     a failed request shows "Couldn't reach iNaturalist." with Retry.
+  - **Location chooser** (fields: latitude, longitude, accuracy, altitude, region;
+    Copy is hidden while it's open). MapLibre's CSS loads after ours, so
+    the container rule needs two classes (`.map-wrap .location-map`) to keep
+    `position: absolute`; with MapLibre's `relative` the map has no height.
+    Unfilled circle.
+    MapLibre map filling the panel; bar Cancel / "Tap to place the pin" /
+    Done. One finger pans; two fingers pan, zoom and rotate; no tilt
+    (`maxPitch: 0`, so the accuracy maths holds). A tap moves the pin there,
+    eases the map to centre on it (instant with reduced motion) and writes
+    lat/lng (5 dp). The accuracy circle is an HTML overlay always half the
+    map's width, centred on the pin (`map.project` on every move); accuracy
+    = its radius on the ground (quarter width × metres per pixel at the
+    pin's latitude, 512-px world), written live on zoom. On opening, the
+    zoom is set from the typed accuracy (25 m if unknown). Dots for every
+    other reading; a blue dot for the device, fed from `main.ts`'s location
+    watch (`fixListeners`, notified in `render()`), not
+    `navigator.geolocation`, which would ask for permission again on iOS.
+    Compass (NavigationControl) shown only while rotated. Without valid
+    typed coordinates there's no pin until a tap, and the map starts at the
+    region's area (stored Nominatim `boundingbox`, else `findArea` on the
+    text), else the device's position, else the world.
+    Moving the pin looks up its region (`placeAt` = `geocoder.lookup`, not
+    saved) into the Region field ("Looking up…" meanwhile; older lookups
+    dropped, and cancelled with the chooser). If the reading is saved with
+    those coordinates and that region text, the looked-up place is saved
+    with it (`pinPlace`), not treated as a typed region. The same run
+    looks up the pin's altitude (`elevationAt`) into the Altitude field,
+    which is cleared meanwhile and left blank if the lookup fails. Typed
+    coordinates don't trigger either lookup.
 - **Region lookup** (Nominatim, `zoom=9`, `accept-language=en`,
   User-Agent `CheckrSpot/2.0`, no contact email by the user's choice) runs
-  only on demand, never at capture or in the background: opening the
+  only on demand, never at capture or in the background: moving the pin in
+  the location chooser looks up that spot, and opening the
   editor looks up **that reading only** (Region placeholder "Looking up…",
   filled in if still open and not typed over), and Labels looks up the
   selected readings. `resolvePlace` in `main.ts` does lookup → `setPlace` →
@@ -315,8 +371,9 @@ from a `Position` (capture) or a photo (import).
   id and team (`85ZT5UZ396`); `MARKETING_VERSION` must stay above the old
   app's latest App Store version (currently set to 2.0); iPhone only
   (`TARGETED_DEVICE_FAMILY = 1`, by the user's choice; adding iPad would need
-  iPad screenshots and review); don't raise the iOS deployment target (15.0)
-  without considering existing users. The old project also built a Mac app,
+  iPad screenshots and review). The iOS deployment target is 16.0, the old
+  app's minimum, so no existing user is left behind (raised from 15.0 for
+  MapLibre); don't raise it further without considering existing users. The old project also built a Mac app,
   but it was never published, so it doesn't matter here. Updating users
   keep the old app's sandbox data; the old app stored none, so no import is
   needed.

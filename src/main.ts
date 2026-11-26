@@ -19,7 +19,7 @@ import {
 } from './db';
 import { Printer } from './printer';
 import { FileSaver } from './fileSaver';
-import type { ReverseGeocoder } from './geocoder';
+import type { AreaFinder, ReverseGeocoder } from './geocoder';
 import { NominatimGeocoder } from './nominatim';
 import { exportFilename, formatReading, toCSV, toJSON, type ExportFormat } from './export';
 import { createEditor } from './editor';
@@ -212,9 +212,12 @@ let readings: Reading[] = [];
 // Most recent position from the location watch; null when we have no usable fix.
 let currentFix: Position | null = null;
 
+// Told of every change to currentFix (the editor's map shows it).
+const fixListeners = new Set<(fix: Position | null) => void>();
+
 // Region lookups run only on demand: when a reading is opened in the editor,
 // and for labels and exports. See dev-docs/reverse-geocoding.md.
-const geocoder: ReverseGeocoder = new NominatimGeocoder();
+const geocoder: ReverseGeocoder & AreaFinder = new NominatimGeocoder();
 
 // Look up a reading's place and save it. Resolves with the updated reading,
 // which also replaces the old one in `readings`.
@@ -238,6 +241,19 @@ const set = (id: string, value: string) => {
 
 const editor = createEditor({
   lookUpPlace: resolvePlace,
+  placeAt: (latitude, longitude) => geocoder.lookup(latitude, longitude),
+  regionArea(region, place) {
+    const area = place && geocoder.areaOf(place);
+    return area ? Promise.resolve(area) : geocoder.findArea(region);
+  },
+  readings: () => readings,
+  watchPosition(listener) {
+    const onFix = (fix: Position | null) =>
+      listener(fix && { latitude: fix.coords.latitude, longitude: fix.coords.longitude });
+    fixListeners.add(onFix);
+    onFix(currentFix);
+    return () => fixListeners.delete(onFix);
+  },
   async save(r) {
     if (!store) throw new Error('storage unavailable');
     await store.updateReading(r);
@@ -633,6 +649,7 @@ function render() {
   }
   btn.classList.toggle('good-fix', fixIsGood);
   btn.classList.toggle('no-fix', !fixIsGood);
+  for (const listener of fixListeners) listener(currentFix);
 }
 
 async function ensurePermission(): Promise<boolean> {
