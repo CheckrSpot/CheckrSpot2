@@ -268,7 +268,14 @@ from a `Position` (capture) or a photo (import).
     live. Done keeps them; Cancel restores. Choosers that need the network
     (taxon, location) have Choose disabled offline.
   - The user wants Cally for the calendar; the time is hour and minute
-    wheels (24-hour).
+    wheels (24-hour). The chooser is `tall` (fixed height below its group);
+    the wheels sit right under the calendar and move with its height (the
+    user rejected pinning them to the bottom: too close to iOS's home-bar
+    swipe). Its heading is Cally's
+    `calendar-select-month` / `calendar-select-year` menus (in the
+    `heading` slot), years from 1970 (`min`) to the end of this year
+    (`max`, set on opening). Picking from a menu also selects the same day
+    there (read from `focusedDate` after Cally's `focusday`).
   - **Taxon chooser**: iNat `species_counts` for the base taxon within the
     radius of the typed coordinates, in the ISO weeks of the year around the
     typed date (any year; `week=`, wrapping at New Year, 53 added there;

@@ -758,6 +758,44 @@ calendar-month::part(selected) {
   border-radius: 50%;
 }
 
+/* The heading is Cally's month and year menus, in place of its text. */
+.calendar-heading {
+  display: flex;
+  justify-content: center;
+  gap: 0.25rem;
+}
+
+calendar-select-month::part(label),
+calendar-select-year::part(label) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+calendar-select-month::part(select),
+calendar-select-year::part(select) {
+  padding: 0.25rem 0.3rem;
+  font: inherit;
+  font-size: 1.06rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+}
+
+/* The date and time chooser fills the space below its group, so its size
+   doesn't change with the month. The wheels follow the calendar (not at the
+   bottom, where they'd be close to iOS's home-bar swipe). */
+.when-body {
+  flex: 1;
+}
+
 /* Hour and minute wheels: three rows visible, the middle one selected and
    marked by a band behind it. */
 .wheels {

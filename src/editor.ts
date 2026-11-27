@@ -44,6 +44,11 @@ const CLOSE_VELOCITY = 0.5;
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
+// The calendar goes back to 1970. Its year menu lists YEAR_SPAN years either
+// side of the shown one, cut off at MIN_DATE and the end of this year.
+const MIN_DATE = '1970-01-01';
+const YEAR_SPAN = 100;
+
 // Coordinates as one "lat, lng" field, the form map apps accept.
 const formatCoords = (latitude: number, longitude: number) =>
   `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
@@ -142,13 +147,18 @@ const MARKUP = `
         true,
       )}
     </form>
-    <section id="when-chooser" class="chooser" aria-label="Choose date and time">
+    <section id="when-chooser" class="chooser tall" aria-label="Choose date and time">
       <header class="chooser-bar">
         <button id="when-cancel" type="button" class="text-btn">Cancel</button>
         <button id="when-done" type="button" class="text-btn">Done</button>
       </header>
-      <div class="chooser-body">
-        <calendar-date id="ed-calendar" class="calendar" first-day-of-week="0">
+      <div class="chooser-body when-body">
+        <calendar-date id="ed-calendar" class="calendar" first-day-of-week="0"
+          min="${MIN_DATE}">
+          <div slot="heading" class="calendar-heading">
+            <calendar-select-month></calendar-select-month>
+            <calendar-select-year max-years="${2 * YEAR_SPAN}"></calendar-select-year>
+          </div>
           <svg slot="previous" class="icon" viewBox="0 0 24 24" aria-label="Previous month">
             <polyline points="15 18 9 12 15 6" />
           </svg>
@@ -617,6 +627,19 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
     dateIn.value = calendar.value;
     updateZone();
   });
+  // Picking a month or year from the heading's menus moves to the same day
+  // there (Cally clamps it to the month's length), and selects it.
+  for (const menu of calendar.querySelectorAll('calendar-select-month, calendar-select-year')) {
+    menu.addEventListener('focusday', () =>
+      requestAnimationFrame(() => {
+        const date = calendar.focusedDate;
+        if (!date || active !== whenChooser) return;
+        calendar.value = date;
+        dateIn.value = date;
+        updateZone();
+      }),
+    );
+  }
 
   // The date and time as typed, or the saved ones if they don't parse.
   function typedWallTime(): number[] {
@@ -635,6 +658,7 @@ export function createEditor(host: EditorHost): { open(r: Reading): void } {
       // The fields now show what the chooser shows.
       const [y, mo, d, h, mi] = typedWallTime();
       const date = `${y}-${pad(mo)}-${pad(d)}`;
+      calendar.setAttribute('max', `${new Date().getFullYear()}-12-31`);
       calendar.value = date;
       calendar.focusedDate = date;
       dateIn.value = date;
