@@ -228,8 +228,10 @@ from a `Position` (capture) or a photo (import).
   date/time (UTC), else DateTimeOriginal as local time in the zone at the
   photo's coordinates. Photos whose
   code + recordedAt match an existing reading are skipped as duplicates. One
-  photo picked → details dialog (as at capture; Discard drops it); several →
-  saved with the most used collector, no locality or taxon.
+  photo to save → details dialog (as at capture, but with Taxon moved above
+  Locality; Discard drops it); several →
+  the same dialog without Taxon, titled "n photos", its values given to all
+  of them (Discard drops them all; taxon null).
   Native reads photos one at a time (iOS: chained completion handlers, no
   blocking) and sends `importProgress` events before each; the app shows
   them in a modal `#import-status` dialog ("Reading photos… n of m"). Problems are listed in an alert afterwards (toast

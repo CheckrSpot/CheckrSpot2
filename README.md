@@ -64,8 +64,8 @@ database.
   the reading gets the photo's time, position, altitude and (when recorded)
   GPS accuracy, and the ID from the QR code in the photo (left empty if there
   is none; photos with more than one are skipped). Import one photo and the
-  usual Locality / Taxon / Collector dialog appears; import several and they
-  get the collector you've used most, with no locality or taxon. Photos that can't be used, or whose reading is already in
+  usual dialog appears, with Taxon first; import several and the
+  same dialog, without Taxon, applies its Locality and Collector to all of them. Photos that can't be used, or whose reading is already in
   the list, are skipped and listed afterwards.
 - The list shows each reading's ID and taxon, newest first. Tap one to open
   the **editor**, which slides in from the right. Every field can be edited as

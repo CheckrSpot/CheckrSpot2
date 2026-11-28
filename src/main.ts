@@ -86,7 +86,7 @@ app.innerHTML = `
     </svg>
   </button>
   <dialog id="details" class="inspector details" aria-labelledby="details-title">
-    <h2 id="details-title">ID<span id="details-code" class="code"></span></h2>
+    <h2 id="details-title"><span id="details-heading">ID</span><span id="details-code" class="code"></span></h2>
     <form method="dialog" class="details-form">
       <label>
         Locality
@@ -94,7 +94,7 @@ app.innerHTML = `
         <input id="locality2" type="text" autocapitalize="sentences" enterkeyhint="next"
           aria-label="Locality, second line" />
       </label>
-      <label>
+      <label id="taxon-field">
         Taxon
         <input id="taxon" type="text" autocapitalize="sentences" autocorrect="off"
           spellcheck="false" enterkeyhint="next" />
@@ -178,6 +178,7 @@ const confirmEl = document.querySelector<HTMLDialogElement>('#confirm-delete')!;
 const detailsEl = document.querySelector<HTMLDialogElement>('#details')!;
 const localityInput = document.querySelector<HTMLInputElement>('#locality')!;
 const locality2Input = document.querySelector<HTMLInputElement>('#locality2')!;
+const taxonField = document.querySelector<HTMLLabelElement>('#taxon-field')!;
 const taxonInput = document.querySelector<HTMLInputElement>('#taxon')!;
 const collectorInput = document.querySelector<HTMLInputElement>('#collector')!;
 const labelsBtn = document.querySelector<HTMLButtonElement>('#labels-btn')!;
@@ -772,10 +773,20 @@ function saveLastDetails({ locality, locality2 }: RememberedDetails) {
   }
 }
 
-// Ask for the optional locality (two lines), taxon and collector. Resolves to null if the
-// user discards the reading.
-function askDetails(code: string): Promise<ReadingDetails | null> {
-  set('details-code', code);
+// Ask for the optional locality (two lines), taxon and collector, for one
+// reading (its code shown in the title) or, with no taxon, for a batch of
+// imported photos. A single imported photo asks for the taxon first. Resolves
+// to null if the user discards the reading(s).
+function askDetails(
+  what: { code: string; imported?: boolean } | { photos: number },
+): Promise<Omit<ReadingDetails, 'code'> | null> {
+  const batch = 'photos' in what;
+  set('details-heading', batch ? `${what.photos} photos` : 'ID');
+  set('details-code', batch ? '' : what.code);
+  taxonField.hidden = batch;
+  const localityField = localityInput.closest('label')!;
+  if (!batch && what.imported) localityField.before(taxonField);
+  else localityField.after(taxonField);
   const last = loadLastDetails();
   localityInput.value = last.locality ?? '';
   locality2Input.value = last.locality2 ?? '';
@@ -793,10 +804,9 @@ function askDetails(code: string): Promise<ReadingDetails | null> {
         }
         const text = (input: HTMLInputElement) => input.value.trim() || null;
         const details = {
-          code,
           locality: text(localityInput),
           locality2: text(locality2Input),
-          taxon: text(taxonInput),
+          taxon: batch ? null : text(taxonInput),
           collector: text(collectorInput),
         };
         saveLastDetails(details);
@@ -808,13 +818,16 @@ function askDetails(code: string): Promise<ReadingDetails | null> {
 }
 
 // The keyboard's return key would submit the form with its first button
-// (Discard), so make it move to the next field or dismiss the keyboard instead.
+// (Discard), so make it move to the next shown field (in their current order)
+// or dismiss the keyboard instead.
 detailsEl.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' || !(e.target instanceof HTMLInputElement)) return;
   e.preventDefault();
-  if (e.target === localityInput) locality2Input.focus();
-  else if (e.target === locality2Input) taxonInput.focus();
-  else if (e.target === taxonInput) collectorInput.focus();
+  const inputs = [...detailsEl.querySelectorAll<HTMLInputElement>('input')].filter(
+    (input) => !input.closest('[hidden]'),
+  );
+  const next = inputs[inputs.indexOf(e.target) + 1];
+  if (next) next.focus();
   else e.target.blur();
 });
 
@@ -841,11 +854,11 @@ async function recordFix() {
     alert(`Not a valid ID: QR code is longer than ${MAX_CODE_LENGTH} characters.`);
     return;
   }
-  const details = await askDetails(code);
+  const details = await askDetails({ code });
   if (!details) return;
   try {
     if (!store) throw new Error('storage unavailable');
-    await store.insertReading(fixFromPosition(pos), details);
+    await store.insertReading(fixFromPosition(pos), { code, ...details });
     countCollector(details.collector);
     await refreshHistory();
     historyEl.parentElement!.scrollTo({ top: 0, behavior: 'smooth' });
@@ -871,9 +884,9 @@ function fixFromPosition(pos: Position): Fix {
 let importing = false;
 
 // Import readings from photos, each of which needs a location and a capture
-// time, and at most one QR code (none leaves the ID empty). A single photo gets
-// the details dialog, as when capturing; several are saved with the most used
-// collector and no locality or taxon.
+// time, and at most one QR code (none leaves the ID empty). A single reading gets
+// the details dialog, as when capturing; several get it without the taxon, and
+// its values go to all of them.
 async function importPhotos() {
   if (importing) return;
   importing = true;
@@ -894,8 +907,7 @@ async function importPhotos() {
 
   // Photos not imported, and why.
   const problems: { name: string; problem: string }[] = [];
-  const toSave: { fix: Fix; details: ReadingDetails }[] = [];
-  const collector = commonCollector();
+  const toSave: { fix: Fix; code: string }[] = [];
   // Importing a photo again would duplicate its reading.
   const seen = new Set(readings.map((r) => `${r.code}@${r.recordedAt}`));
   photos.forEach((p, i) => {
@@ -911,27 +923,30 @@ async function importPhotos() {
       return;
     }
     seen.add(key);
-    const details = { code: result.code, locality: null, locality2: null, taxon: null, collector };
-    toSave.push({ fix: result.fix, details });
+    toSave.push({ fix: result.fix, code: result.code });
   });
 
-  if (photos.length === 1) {
-    if (toSave.length === 0) {
-      alert(`Photo not imported: ${problems[0].problem}.`);
-      return;
-    }
-    const details = await askDetails(toSave[0].details.code);
+  if (photos.length === 1 && toSave.length === 0) {
+    alert(`Photo not imported: ${problems[0].problem}.`);
+    return;
+  }
+  let details: Omit<ReadingDetails, 'code'> | null = null;
+  if (toSave.length > 0) {
+    details = await askDetails(
+      toSave.length === 1
+        ? { code: toSave[0].code, imported: true }
+        : { photos: toSave.length },
+    );
     if (!details) return;
-    toSave[0].details = details;
   }
 
   let saved = 0;
   let saveError: string | null = null;
   try {
     if (!store) throw new Error('storage unavailable');
-    for (const { fix, details } of toSave) {
-      await store.insertReading(fix, details);
-      countCollector(details.collector);
+    for (const { fix, code } of toSave) {
+      await store.insertReading(fix, { code, ...details! });
+      countCollector(details!.collector);
       saved++;
     }
   } catch (saveErr) {
@@ -944,7 +959,7 @@ async function importPhotos() {
     const newest = toSave
       .slice(0, saved)
       .reduce((a, b) => (b.fix.recordedAt > a.fix.recordedAt ? b : a));
-    revealReading(newest.details.code, newest.fix.recordedAt);
+    revealReading(newest.code, newest.fix.recordedAt);
   }
   const what = `${saved} reading${saved === 1 ? '' : 's'}`;
   const notes = problems.map(({ name, problem }) => `${name}: ${problem}`);

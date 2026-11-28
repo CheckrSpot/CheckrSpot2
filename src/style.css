@@ -217,6 +217,8 @@ button:hover:not(:disabled) {
   display: flex;
   align-items: center;
   gap: 1rem;
+  /* A row's usual height, kept when it has neither code nor taxon. */
+  min-height: 3rem;
   padding: 0.75rem 1.25rem;
   font-size: 1.19rem;
   font-weight: 400;
