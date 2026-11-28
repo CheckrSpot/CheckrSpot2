@@ -136,8 +136,14 @@ class SqliteReadingsStore implements ReadingsStore {
   async init(): Promise<void> {
     await this.sqlite.addUpgradeStatement(DB_NAME, UPGRADE_STATEMENTS);
 
-    // Reuse an existing connection if one is already open (e.g. hot reload).
-    const isConn = (await this.sqlite.isConnection(DB_NAME, false)).result;
+    // Native connections outlive the web view: iOS can kill its content
+    // process in the background and Capacitor reloads the page, leaving the
+    // native side with a connection this page doesn't know about, so
+    // createConnection would fail ("already exists"). The consistency check
+    // closes native connections missing from the JS side; isConnection then
+    // only reports ones that are really usable.
+    const consistent = (await this.sqlite.checkConnectionsConsistency()).result;
+    const isConn = consistent && (await this.sqlite.isConnection(DB_NAME, false)).result;
     this.db = isConn
       ? await this.sqlite.retrieveConnection(DB_NAME, false)
       : await this.sqlite.createConnection(DB_NAME, false, 'no-encryption', DB_VERSION, false);
